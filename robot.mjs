@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, readd
 import http from 'node:http';
 import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
+import { vapidKeys, enregistrer, alertes, envoyer } from './alertes.mjs';
 
 const t0 = Date.now();
 const say = m => console.log(`[${Math.round((Date.now()-t0)/1000)} s] ${m}`);
@@ -20,6 +21,15 @@ let html;
 try{ html = await dechiffre(key, readFileSync('app.enc', 'utf8')); }catch(e){ say('déchiffrement impossible (mot de passe différent de celui de la publication ?)'); process.exit(1); }
 let prev = null;
 if(existsSync('site/data.enc')){ try{ prev = JSON.parse(await dechiffre(key, readFileSync('site/data.enc', 'utf8'))); }catch(e){ say('état précédent illisible : on repart de zéro'); } }
+// tes données personnelles (stock de métaux…) : lues seulement pour calculer la valeur du jour, jamais recopiées en clair
+const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros)/;
+let perso = {};
+if(existsSync('coffre.enc')){ try{ perso = JSON.parse(await dechiffre(key, readFileSync('coffre.enc', 'utf8'))).data || {}; }catch(e){ say('coffre illisible'); } }
+let subs = [];
+if(existsSync('abonnements.enc')){ try{ subs = JSON.parse(await dechiffre(key, readFileSync('abonnements.enc', 'utf8'))).subs || []; }catch(e){ say('abonnements illisibles'); } }
+let H = { v:1, days:{}, alerts:{} };
+if(existsSync('site/historique.enc')){ try{ H = JSON.parse(await dechiffre(key, readFileSync('site/historique.enc', 'utf8'))); }catch(e){ say('historique illisible : on repart de zéro'); } }
+const vapid = vapidKeys(MDP);
 
 const srv = http.createServer((req, res) => {
   res.writeHead(200, { 'content-type':'text/html; charset=utf-8', 'cache-control':'no-store' });
@@ -58,6 +68,7 @@ try{
       rq.onsuccess = () => { const tx = rq.result.transaction('cache', 'readwrite'), st = tx.objectStore('cache'); Object.entries(snap.idb || {}).forEach(([k, v]) => { try{ st.put(v, k); }catch(e){} }); tx.oncomplete = res; tx.onerror = res; };
       rq.onerror = res; });
   }, prev);
+  await page.evaluate(({ perso, re }) => { const R = new RegExp(re); Object.entries(perso).forEach(([k, v]) => { if(R.test(k)) try{ localStorage.setItem(k, v); }catch(e){} }); }, { perso, re: PERSO.source });
 
   // 2) l'application se lance et récupère ce qui doit l'être (le calendrier de publication évite les requêtes inutiles)
   await page.goto(base + '/app', { waitUntil: 'domcontentloaded', timeout: 90000 });
@@ -73,6 +84,20 @@ try{
   await page.evaluate(() => { try{ if(typeof pvCompute==='function') pvCompute(false); }catch(e){} });
   await page.waitForFunction(() => !window.__pv || window.__pv.done, null, { timeout: 240000, polling: 2000 }).catch(() => say('prévision : pas finie à temps'));
   say('prévision calculée');
+  // relevé du jour : températures, probabilités, sources en panne, valeur de ton stock
+  const jour = await page.evaluate(() => {
+    const o = { t:{}, pv:{}, fails:[], mv:null };
+    for(const k of ['traditional','crypto','metals','france','cross']){ try{ const v = svModel(k).temp; if(v!=null && isFinite(v)) o.t[k] = Math.round(v*10)/10; }catch(e){} }
+    try{ const R = window.__pv && window.__pv.res; if(R) Object.values(R).forEach(x => { if(!x || x.missing) return; const rel = s => s && s.auc!=null && s.auc >= 0.65;
+      o.pv[x.id] = { label: x.label, b: Math.round(x.bear.now.p*100), u: Math.round(x.bull.now.p*100), sb: x.bear.now.sc, su: x.bull.now.sc, baseB: Math.round(x.bear.st.base*100), baseU: Math.round(x.bull.st.base*100), relB: rel(x.bear.st), relU: rel(x.bull.st), phase: x.phase ? x.phase.k : null, dd: x.phase ? Math.round(x.phase.dd) : null }; }); }catch(e){}
+    try{ const dots = [...document.querySelectorAll('.fresh-dot.fail')]; o.fails = [...new Set(dots.map(el => { const c = el.closest('.card, .gauge-card, [class*=card]'); const k = c && c.querySelector('.k, h3, .title-row'); return ((k && k.textContent) || el.id).replace(/\s+/g,' ').trim().slice(0, 50); }))]; }catch(e){}
+    try{ if(typeof renderMyMetals==='function') renderMyMetals(); const h = JSON.parse(localStorage.getItem('mt_metals_value_history')||'[]'); const last = h[h.length-1]; if(last && last.date === new Date().toISOString().slice(0,10) && last.value > 0) o.mv = { value: Math.round(last.value*100)/100, cost: last.cost!=null ? Math.round(last.cost*100)/100 : null }; }catch(e){}
+    return o;
+  });
+  enregistrer(H, jour);
+  const al = alertes(H, jour, subs);
+  say(`relevé du jour enregistré (${Object.keys(H.days).length} jours) ; alertes : ${Object.entries(al.counts).map(([k, n]) => k + ' ' + n).join(', ')}`);
+  if(al.out.length && !process.env.DIAG){ const r = await envoyer(al.out, vapid); say(`notifications : ${r.ok} envoyée(s), ${r.ko} en échec`); }
   await page.evaluate(() => { try{ snapshotHistory(); }catch(e){} });
   await idle(6000, 30000);
   await page.waitForTimeout(3000); // écritures différées (fraîcheur, historiques)
@@ -111,9 +136,10 @@ try{
       rq.onerror = () => res({}); });
     return { ls, idb };
   }, KEEP_LS.source);
-  const snap = { v: 1, at: Date.now(), ls: st.ls, idb: st.idb };
+  const snap = { v: 1, at: Date.now(), ls: st.ls, idb: st.idb, vapid: vapid.publicKey };
   mkdirSync('out', { recursive: true });
   writeFileSync('out/data.enc', await chiffre(key, JSON.stringify(snap)));
+  writeFileSync('out/historique.enc', await chiffre(key, JSON.stringify(H)));
   copyFileSync('app.enc', 'out/app.enc'); copyFileSync('index.html', 'out/index.html'); copyFileSync('sel.json', 'out/sel.json');
   if(existsSync('static')) for(const f of readdirSync('static')) copyFileSync('static/'+f, 'out/'+f); // icônes, manifeste, service worker
   writeFileSync('out/.nojekyll', '');

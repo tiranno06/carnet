@@ -2,6 +2,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "playwright-core": "1.48.2"
+    "playwright-core": "1.48.2",
+    "web-push": "3.6.7"
   }
 }
