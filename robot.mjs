@@ -86,6 +86,11 @@ try{
     console.log('::notice title=Bilan::' + esc(`${d.ok} indicateurs à jour, ${d.bad.length} en échec, ${d.pend.length} en attente\nFlux ETF : ${d.etf}`));
     console.log('::notice title=Echecs::' + esc(d.bad.join('\n') || 'aucun'));
     console.log('::notice title=En attente::' + esc(d.pend.join('\n') || 'aucun'));
+    const soso = await page.evaluate(async () => {
+      const k = (localStorage.getItem('mt_sosovalue_key')||'').trim(); if(!k) return 'pas de clé SoSoValue';
+      try{ const r = await fetch('https://openapi.sosovalue.com/openapi/v1/etfs/summary-history?symbol=BTC&country_code=US', { headers:{ 'x-soso-api-key': k } }); const t = await r.text(); return r.status + ' ' + t.slice(0, 600); }catch(e){ return 'erreur ' + e.message; }
+    });
+    console.log('::notice title=SoSoValue::' + esc(soso));
   }
   // 3) on récupère l'état (filtré) et on le chiffre
   const st = await page.evaluate(async reSrc => {
