@@ -69,6 +69,10 @@ try{
     await idle(5000, 45000);
     await page.evaluate(() => { try{ window.__svHistLast = {}; renderSimpleViews(true); }catch(e){} });
   }
+  // onglet Prévision : probabilités calculées ici pour que la page s'ouvre déjà avec
+  await page.evaluate(() => { try{ if(typeof pvCompute==='function') pvCompute(false); }catch(e){} });
+  await page.waitForFunction(() => !window.__pv || window.__pv.done, null, { timeout: 240000, polling: 2000 }).catch(() => say('prévision : pas finie à temps'));
+  say('prévision calculée');
   await page.evaluate(() => { try{ snapshotHistory(); }catch(e){} });
   await idle(6000, 30000);
   await page.waitForTimeout(3000); // écritures différées (fraîcheur, historiques)
