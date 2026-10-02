@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0b0d12">
+<title>Carnet</title>
+<style>
+  :root{--bg:#0b0d12;--panel:#141821;--line:#262c38;--tx:#e8ebf2;--dim:#8b93a5;--acc:#e8a33d;--red:#ef5b5b;}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  main{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px 16px}
+  form{width:100%;max-width:360px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 22px}
+  h1{font-size:1.15rem;margin:0 0 4px;font-weight:600}
+  p{color:var(--dim);font-size:.85rem;margin:0 0 18px;line-height:1.45}
+  input[type=password]{width:100%;font-size:1rem;padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:#0e1118;color:var(--tx)}
+  input[type=password]:focus{outline:none;border-color:var(--acc)}
+  label.r{display:flex;gap:8px;align-items:center;font-size:.85rem;color:var(--dim);margin:12px 0 16px;cursor:pointer}
+  button{width:100%;font-size:1rem;font-weight:600;padding:12px;border-radius:10px;border:0;background:var(--acc);color:#111;cursor:pointer;min-height:44px}
+  button[disabled]{opacity:.6;cursor:wait}
+  #msg{min-height:1.3em;font-size:.85rem;margin-top:12px;color:var(--dim)}
+  #msg.err{color:var(--red)}
+</style>
+</head>
+<body>
+<main>
+  <form id="f" autocomplete="off" hidden>
+    <h1>Carnet</h1>
+    <p>Entre ton mot de passe pour ouvrir.</p>
+    <input type="password" id="pw" autocomplete="current-password" aria-label="Mot de passe" required>
+    <label class="r"><input type="checkbox" id="keep" checked> Se souvenir sur cet appareil</label>
+    <button id="go" type="submit">Ouvrir</button>
+    <div id="msg" role="status" aria-live="polite"></div>
+  </form>
+  <div id="wait" style="color:#8b93a5;font-size:.9rem">Ouverture…</div>
+</main>
+<script>
+(function(){
+  'use strict';
+  var $ = function(id){ return document.getElementById(id); };
+  var b64 = function(buf){ var s = '', u = new Uint8Array(buf); for(var i=0;i<u.length;i+=0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i+0x8000)); return btoa(s); };
+  var unb64 = function(t){ return Uint8Array.from(atob(t), function(c){ return c.charCodeAt(0); }); };
+  function gunzip(bytes){ return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer().then(function(b){ return new TextDecoder().decode(b); }); }
+  function getText(name){ return fetch(name + '?t=' + Date.now(), { cache:'no-store' }).then(function(r){ if(!r.ok) throw new Error(name + ' ' + r.status); return r.text(); }); }
+  function dec(key, txt){ var f = JSON.parse(txt); return crypto.subtle.decrypt({ name:'AES-GCM', iv:unb64(f.iv) }, key, unb64(f.ct)).then(function(pt){ return gunzip(new Uint8Array(pt)); }); }
+  function derive(pw){
+    return getText('sel.json').then(function(t){
+      var sel = JSON.parse(t);
+      return crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']).then(function(base){
+        return crypto.subtle.deriveKey({ name:'PBKDF2', salt:unb64(sel.sel), iterations:sel.iter, hash:'SHA-256' }, base, { name:'AES-GCM', length:256 }, true, ['encrypt','decrypt']);
+      });
+    });
+  }
+  function importRaw(t){ return crypto.subtle.importKey('raw', unb64(t), { name:'AES-GCM' }, true, ['encrypt','decrypt']); }
+  function store(name, mode, fn){
+    return new Promise(function(res){
+      var rq = indexedDB.open(name, 1);
+      rq.onupgradeneeded = function(){ rq.result.createObjectStore(name==='mt_cache_db' ? 'cache' : 'f'); };
+      rq.onsuccess = function(){ var db = rq.result, tx = db.transaction(name==='mt_cache_db' ? 'cache' : 'f', mode); fn(tx.objectStore(name==='mt_cache_db' ? 'cache' : 'f'), res); tx.oncomplete = function(){ res(); }; tx.onerror = function(){ res(); }; };
+      rq.onerror = function(){ res(); };
+    });
+  }
+  // copie locale pour ouvrir même sans réseau
+  function saveOffline(app, data){ return store('gms_shell', 'readwrite', function(st){ st.put(app, 'app'); if(data) st.put(data, 'data'); }); }
+  function loadOffline(){ var out = {}; return store('gms_shell', 'readonly', function(st){ st.get('app').onsuccess = function(e){ out.app = e.target.result; }; st.get('data').onsuccess = function(e){ out.data = e.target.result; }; }).then(function(){ return out; }); }
+
+  // ---- données apportées par le robot : fusion avec celles de l'appareil ----
+  var OVERWRITE = /^mt_(snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision)/;
+  function J(k, d){ try{ var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } }
+  function importSnap(snap){
+    var ls = snap.ls || {};
+    try{
+      Object.keys(ls).forEach(function(k){
+        var v = ls[k], r;
+        try{
+          if(k === 'mt_sv_hist'){ var L = J(k, {}), R = JSON.parse(v); Object.keys(R).forEach(function(d){ L[d] = L[d] || {}; Object.keys(R[d]).forEach(function(src){ L[d][src] = Object.assign({}, L[d][src] || {}, R[d][src]); }); }); var days = Object.keys(L).sort(); while(days.length > 60) delete L[days.shift()]; localStorage.setItem(k, JSON.stringify(L)); }
+          else if(k === 'mt_history'){ var m = {}; J(k, []).forEach(function(h){ m[h.date] = h; }); JSON.parse(v).forEach(function(h){ m[h.date] = h; }); localStorage.setItem(k, JSON.stringify(Object.keys(m).sort().slice(-90).map(function(d){ return m[d]; }))); }
+          else if(k === 'mt_learned_dates'){ var A = J(k, {}), B = JSON.parse(v); Object.keys(B).forEach(function(kind){ var set = {}; (A[kind]||[]).concat(B[kind]||[]).forEach(function(x){ set[x] = 1; }); A[kind] = Object.keys(set).sort(); }); localStorage.setItem(k, JSON.stringify(A)); }
+          else if(k === 'mt_etf_flows_hist' || k === 'mt_data_freshness'){ localStorage.setItem(k, JSON.stringify(Object.assign(J(k, {}), JSON.parse(v)))); }
+          else if(OVERWRITE.test(k)) localStorage.setItem(k, v);
+        }catch(e){}
+      });
+      localStorage.setItem('mt_robot_at', String(snap.at || 0));
+    }catch(e){}
+    var idb = snap.idb || {};
+    return store('mt_cache_db', 'readwrite', function(st){
+      Object.keys(idb).forEach(function(k){
+        var v = idb[k]; if(v == null) return;
+        var g = st.get(k);
+        g.onsuccess = function(){ var cur = g.result; if(!cur || !cur.ts || !v.ts || v.ts >= cur.ts) st.put(v, k); };
+      });
+    });
+  }
+
+  function open(key, beforeShow){
+    var appTxt, dataTxt, fromNet = true;
+    return Promise.all([getText('app.enc'), getText('data.enc').catch(function(){ return null; })])
+      .then(function(r){ appTxt = r[0]; dataTxt = r[1]; })
+      .catch(function(err){ fromNet = false; return loadOffline().then(function(o){ if(!o.app) throw err; appTxt = o.app; dataTxt = o.data || null; }); })
+      .then(function(){ return dec(key, appTxt); })
+      .then(function(html){
+        if(fromNet) saveOffline(appTxt, dataTxt);
+        var p = dataTxt ? dec(key, dataTxt).then(function(t){ return JSON.parse(t); }).catch(function(){ return null; }) : Promise.resolve(null);
+        return p.then(function(snap){ return (snap ? importSnap(snap) : Promise.resolve()).then(function(){ return [html, snap]; }); });
+      })
+      .then(function(r){ return (beforeShow ? beforeShow() : Promise.resolve()).catch(function(){}).then(function(){ return r; }); })
+      .then(function(r){
+        window.__gmsKey = key; window.__gmsRobotAt = r[1] ? r[1].at : 0; window.__gmsOffline = !fromNet;
+        document.open(); document.write(r[0]); document.close();
+      });
+  }
+  function showForm(err){
+    $('wait').hidden = true; $('f').hidden = false; $('go').disabled = false;
+    $('msg').textContent = err || ''; $('msg').className = err ? 'err' : '';
+    $('pw').focus();
+  }
+  $('f').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var pw = $('pw').value; if(!pw) return;
+    $('go').disabled = true; $('msg').className = ''; $('msg').textContent = 'Vérification…';
+    derive(pw).then(function(key){
+      return open(key, function(){
+        return crypto.subtle.exportKey('raw', key).then(function(raw){ try{ ($('keep').checked ? localStorage : sessionStorage).setItem('gms_k', b64(raw)); }catch(e){} });
+      });
+    }).catch(function(e){
+      var m = String(e && e.message || e);
+      showForm(/app\.enc 404/.test(m) ? "Le site n'est pas encore prêt : réessaie dans quelques minutes." : (/réseau|Failed to fetch|NetworkError/i.test(m) ? 'Pas de connexion internet.' : 'Mot de passe incorrect.'));
+    });
+  });
+  var saved = null; try{ saved = localStorage.getItem('gms_k') || sessionStorage.getItem('gms_k'); }catch(e){}
+  if(!window.crypto || !crypto.subtle || !window.DecompressionStream){ showForm('Ce navigateur est trop ancien pour ouvrir ce carnet.'); return; }
+  if(saved){ importRaw(saved).then(function(k){ return open(k); }).catch(function(e){
+    var m = String(e && e.message || e);
+    if(/app\.enc 404/.test(m)) return showForm("Le site n'est pas encore prêt : réessaie dans quelques minutes.");
+    if(/réseau|Failed to fetch|NetworkError/i.test(m)) return showForm('Pas de connexion internet (et aucune copie enregistrée sur cet appareil).');
+    try{ localStorage.removeItem('gms_k'); sessionStorage.removeItem('gms_k'); }catch(_){} showForm('Le mot de passe a changé : entre le nouveau.');
+  }); }
+  else showForm();
+})();
+</script>
+</body>
+</html>

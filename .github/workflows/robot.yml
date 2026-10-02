@@ -1,0 +1,44 @@
+name: robot
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: robot
+  cancel-in-progress: false
+jobs:
+  robot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/checkout@v4
+      - name: État précédent
+        run: git fetch -q --depth=1 origin site && git worktree add -q site FETCH_HEAD || echo "premier passage"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund --silent
+      - name: Passage du robot
+        run: node robot.mjs
+        env:
+          MOT_DE_PASSE: ${{ secrets.MOT_DE_PASSE }}
+      - name: Mémoriser l'état (branche site, écrasée à chaque passage)
+        if: hashFiles('out/data.enc') != ''
+        run: |
+          cd out
+          git init -q -b site
+          git add -A
+          git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -qm maj
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site
+      - if: hashFiles('out/data.enc') != ''
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+      - if: hashFiles('out/data.enc') != ''
+        uses: actions/deploy-pages@v4

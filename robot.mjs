@@ -1,0 +1,99 @@
+// Robot horaire : ouvre l'application chiffrée dans un navigateur sans écran, la laisse récupérer
+// les données, puis enregistre l'état (chiffré) pour que la page s'ouvre déjà à jour.
+// Rien de lisible n'est jamais écrit ni affiché : tout ce qui sort d'ici est chiffré.
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
+import http from 'node:http';
+import { chromium } from 'playwright-core';
+import { cle, chiffre, dechiffre } from './chiffre.mjs';
+
+const t0 = Date.now();
+const say = m => console.log(`[${Math.round((Date.now()-t0)/1000)} s] ${m}`);
+const MDP = process.env.MOT_DE_PASSE;
+if(!existsSync('app.enc')){ say("aucune application publiée pour l'instant : rien à faire"); process.exit(0); }
+if(!MDP){ say('secret MOT_DE_PASSE pas encore configuré : rien à faire'); process.exit(0); }
+
+// mêmes familles de données que la page reprend (jamais de clé, jamais de donnée personnelle)
+const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision)/;
+
+const key = await cle(MDP, JSON.parse(readFileSync('sel.json', 'utf8')));
+let html;
+try{ html = await dechiffre(key, readFileSync('app.enc', 'utf8')); }catch(e){ say('déchiffrement impossible (mot de passe différent de celui de la publication ?)'); process.exit(1); }
+let prev = null;
+if(existsSync('site/data.enc')){ try{ prev = JSON.parse(await dechiffre(key, readFileSync('site/data.enc', 'utf8'))); }catch(e){ say('état précédent illisible : on repart de zéro'); } }
+
+const srv = http.createServer((req, res) => {
+  res.writeHead(200, { 'content-type':'text/html; charset=utf-8', 'cache-control':'no-store' });
+  res.end(req.url.startsWith('/app') ? html : '<!doctype html><meta charset="utf-8"><title>-</title>');
+});
+await new Promise(r => srv.listen(0, '127.0.0.1', r));
+const base = `http://127.0.0.1:${srv.address().port}`;
+
+const browser = await chromium.launch({
+  executablePath: process.env.CHROME || '/usr/bin/google-chrome', headless: true,
+  args: ['--disable-web-security', '--disable-features=IsolateOrigins,site-per-process', '--no-first-run'],
+});
+let code = 0;
+try{
+  const ctx = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+    locale: 'fr-FR', timezoneId: 'Europe/Paris', viewport: { width: 1300, height: 900 },
+  });
+  await ctx.addInitScript(() => { window.__GMS_ROBOT = true; try{ window.Notification = undefined; }catch(e){} });
+  const page = await ctx.newPage();
+  page.on('dialog', d => d.dismiss().catch(() => {}));
+  let inflight = 0, lastNet = Date.now();
+  page.on('request', () => { inflight++; lastNet = Date.now(); });
+  const done = () => { inflight = Math.max(0, inflight-1); lastNet = Date.now(); };
+  page.on('requestfinished', done); page.on('requestfailed', done);
+  const idle = async (quiet, max) => { const s = Date.now(); while(Date.now()-s < max){ if(inflight===0 && Date.now()-lastNet > quiet) return; await page.waitForTimeout(500); } };
+
+  // 1) on remet l'état de l'heure précédente (caches, historiques) avant d'ouvrir l'application
+  await page.goto(base + '/vide');
+  await page.evaluate(async snap => {
+    localStorage.clear();
+    localStorage.setItem('mt_anim', '0'); localStorage.setItem('mt_economy_mode', '0'); localStorage.setItem('mt_scheduler_off', '1');
+    if(!snap) return;
+    Object.entries(snap.ls || {}).forEach(([k, v]) => { try{ localStorage.setItem(k, v); }catch(e){} });
+    await new Promise(res => { const rq = indexedDB.open('mt_cache_db', 1); rq.onupgradeneeded = () => rq.result.createObjectStore('cache');
+      rq.onsuccess = () => { const tx = rq.result.transaction('cache', 'readwrite'), st = tx.objectStore('cache'); Object.entries(snap.idb || {}).forEach(([k, v]) => { try{ st.put(v, k); }catch(e){} }); tx.oncomplete = res; tx.onerror = res; };
+      rq.onerror = res; });
+  }, prev);
+
+  // 2) l'application se lance et récupère ce qui doit l'être (le calendrier de publication évite les requêtes inutiles)
+  await page.goto(base + '/app', { waitUntil: 'domcontentloaded', timeout: 90000 });
+  await page.waitForFunction(() => (window.__lastRefreshAllAt || 0) > 0, null, { timeout: 120000, polling: 1000 });
+  await page.waitForFunction(() => typeof refreshing !== 'undefined' && !refreshing, null, { timeout: 360000, polling: 2000 });
+  say('actualisation principale terminée');
+  for(const tab of ['crypto', 'cross', 'mymetals', 'france', 'traditional']){
+    await page.evaluate(t => { try{ switchTab(t); }catch(e){} }, tab);
+    await idle(5000, 45000);
+    await page.evaluate(() => { try{ window.__svHistLast = {}; renderSimpleViews(true); }catch(e){} });
+  }
+  await page.evaluate(() => { try{ snapshotHistory(); }catch(e){} });
+  await idle(6000, 30000);
+  await page.waitForTimeout(3000); // écritures différées (fraîcheur, historiques)
+
+  // 3) on récupère l'état (filtré) et on le chiffre
+  const st = await page.evaluate(async reSrc => {
+    const re = new RegExp(reSrc), ls = {};
+    for(let i=0;i<localStorage.length;i++){ const k = localStorage.key(i); if(re.test(k)) ls[k] = localStorage.getItem(k); }
+    const idb = await new Promise(res => { const rq = indexedDB.open('mt_cache_db', 1); rq.onupgradeneeded = () => rq.result.createObjectStore('cache');
+      rq.onsuccess = () => { const s = rq.result.transaction('cache', 'readonly').objectStore('cache'); const a = s.getAllKeys(), b = s.getAll(); let n = 0;
+        const fin = () => { if(++n < 2) return; const o = {}, lim = Date.now() - 12*86400000; a.result.forEach((k, i) => { const v = b.result[i]; if(v && v.ts && v.ts < lim) return; o[k] = v; }); res(o); };
+        a.onsuccess = fin; b.onsuccess = fin; a.onerror = () => res({}); };
+      rq.onerror = () => res({}); });
+    return { ls, idb };
+  }, KEEP_LS.source);
+  const snap = { v: 1, at: Date.now(), ls: st.ls, idb: st.idb };
+  mkdirSync('out', { recursive: true });
+  writeFileSync('out/data.enc', await chiffre(key, JSON.stringify(snap)));
+  copyFileSync('app.enc', 'out/app.enc'); copyFileSync('index.html', 'out/index.html'); copyFileSync('sel.json', 'out/sel.json');
+  writeFileSync('out/.nojekyll', '');
+  say(`état enregistré : ${Object.keys(st.ls).length} historiques, ${Object.keys(st.idb).length} données en cache`);
+}catch(e){
+  say('échec : ' + String(e && e.message || e).split('\n')[0].slice(0, 160));
+  code = 1;
+}finally{
+  await browser.close().catch(() => {}); srv.close();
+}
+process.exit(code);
