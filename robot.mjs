@@ -73,6 +73,20 @@ try{
   await idle(6000, 30000);
   await page.waitForTimeout(3000); // écritures différées (fraîcheur, historiques)
 
+  // diagnostic détaillé : UNIQUEMENT dans le dépôt privé (variable DIAG), jamais dans le dépôt public
+  if(process.env.DIAG){
+    const d = await page.evaluate(() => {
+      const dots = [...document.querySelectorAll('.fresh-dot')];
+      const name = el => { const c = el.closest('.card, .gauge-card, [class*=card]'); const k = c && c.querySelector('.k, h3, .title-row'); return ((k && k.textContent) || el.id).replace(/\s+/g,' ').trim().slice(0, 60); };
+      const bad = dots.filter(e => e.classList.contains('fail')).map(e => name(e) + ' → ' + (e.title||'').replace(/^.*?\)\s*:?\s*/, '').slice(0, 90));
+      const pend = dots.filter(e => e.classList.contains('pending')).map(name);
+      return { ok: dots.filter(e => e.classList.contains('ok')).length, bad, pend, etf: (document.getElementById('etfflow-value')?.textContent||'') + ' | ' + (document.getElementById('etfflow-detail')?.textContent||'') };
+    });
+    const esc = t => String(t).replace(/%/g,'%25').replace(/\r/g,'').replace(/\n/g,'%0A');
+    console.log('::notice title=Bilan::' + esc(`${d.ok} indicateurs à jour, ${d.bad.length} en échec, ${d.pend.length} en attente\nFlux ETF : ${d.etf}`));
+    console.log('::notice title=Echecs::' + esc(d.bad.join('\n') || 'aucun'));
+    console.log('::notice title=En attente::' + esc(d.pend.join('\n') || 'aucun'));
+  }
   // 3) on récupère l'état (filtré) et on le chiffre
   const st = await page.evaluate(async reSrc => {
     const re = new RegExp(reSrc), ls = {};
