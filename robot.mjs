@@ -95,6 +95,10 @@ try{
       try{ const r = await fetch('https://openapi.sosovalue.com/openapi/v1/etfs/summary-history?symbol=BTC&country_code=US', { headers:{ 'x-soso-api-key': k } }); const t = await r.text(); return r.status + ' ' + t.slice(0, 600); }catch(e){ return 'erreur ' + e.message; }
     });
     console.log('::notice title=SoSoValue::' + esc(soso));
+    const pv = await page.evaluate(() => { const P = window.__pv; if(!P || !P.res) return 'non calculée'; return (P.err && P.err.length ? 'manquant : ' + P.err.join(', ') + '\n' : '') + Object.values(P.res).map(R => R.missing ? R.label + ' : indisponible ' + (R.why||'') : `${R.label} : baisse ${Math.round(R.bear.now.p*100)} % (fiab. ${Math.round((R.bear.st.auc||0)*100)}) · hausse ${Math.round(R.bull.now.p*100)} % (fiab. ${Math.round((R.bull.st.auc||0)*100)}) · ${R.phase ? R.phase.t : ''}`).join('\n'); });
+    console.log('::notice title=Prevision::' + esc(pv));
+    const fed = await page.evaluate(() => JSON.stringify(window.__fedOutlook || window.__fedProbs || null));
+    console.log('::notice title=Fed::' + esc(fed));
   }
   // 3) on récupère l'état (filtré) et on le chiffre
   const st = await page.evaluate(async reSrc => {
