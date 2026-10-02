@@ -1,7 +1,7 @@
 // Robot horaire : ouvre l'application chiffrée dans un navigateur sans écran, la laisse récupérer
 // les données, puis enregistre l'état (chiffré) pour que la page s'ouvre déjà à jour.
 // Rien de lisible n'est jamais écrit ni affiché : tout ce qui sort d'ici est chiffré.
-import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, readdirSync } from 'node:fs';
 import http from 'node:http';
 import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
@@ -107,6 +107,7 @@ try{
   mkdirSync('out', { recursive: true });
   writeFileSync('out/data.enc', await chiffre(key, JSON.stringify(snap)));
   copyFileSync('app.enc', 'out/app.enc'); copyFileSync('index.html', 'out/index.html'); copyFileSync('sel.json', 'out/sel.json');
+  if(existsSync('static')) for(const f of readdirSync('static')) copyFileSync('static/'+f, 'out/'+f); // icônes, manifeste, service worker
   writeFileSync('out/.nojekyll', '');
   say(`état enregistré : ${Object.keys(st.ls).length} historiques, ${Object.keys(st.idb).length} données en cache`);
 }catch(e){

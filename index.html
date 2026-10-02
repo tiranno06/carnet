@@ -6,6 +6,13 @@
 <meta name="robots" content="noindex,nofollow">
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#0b0d12">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Carnet">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <title>Carnet</title>
 <style>
   :root{--bg:#0b0d12;--panel:#141821;--line:#262c38;--tx:#e8ebf2;--dim:#8b93a5;--acc:#e8a33d;--red:#ef5b5b;}
@@ -39,6 +46,9 @@
 <script>
 (function(){
   'use strict';
+  // installation comme application (Android / ordinateur) + ouverture hors connexion
+  try{ if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function(){}); }catch(e){}
+  var HEAD_PWA = '<link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon-192.png"><link rel="apple-touch-icon" href="apple-touch-icon.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Carnet"><meta name="theme-color" content="#0b0d12">';
   var $ = function(id){ return document.getElementById(id); };
   var b64 = function(buf){ var s = '', u = new Uint8Array(buf); for(var i=0;i<u.length;i+=0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i+0x8000)); return btoa(s); };
   var unb64 = function(t){ return Uint8Array.from(atob(t), function(c){ return c.charCodeAt(0); }); };
@@ -108,7 +118,8 @@
       .then(function(r){ return (beforeShow ? beforeShow() : Promise.resolve()).catch(function(){}).then(function(){ return r; }); })
       .then(function(r){
         window.__gmsKey = key; window.__gmsRobotAt = r[1] ? r[1].at : 0; window.__gmsOffline = !fromNet;
-        document.open(); document.write(r[0]); document.close();
+        var page = String(r[0]).replace(/<head[^>]*>/i, function(m){ return m + HEAD_PWA; });
+        document.open(); document.write(page); document.close();
       });
   }
   function showForm(err){
