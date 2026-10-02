@@ -88,7 +88,7 @@ try{
   const jour = await page.evaluate(() => {
     const o = { t:{}, pv:{}, fails:[], mv:null };
     for(const k of ['traditional','crypto','metals','france','cross']){ try{ const v = svModel(k).temp; if(v!=null && isFinite(v)) o.t[k] = Math.round(v*10)/10; }catch(e){} }
-    try{ const R = window.__pv && window.__pv.res; if(R) Object.values(R).forEach(x => { if(!x || x.missing) return; const rel = s => s && s.auc!=null && s.auc >= 0.65;
+    try{ const R = window.__pv && window.__pv.res; if(R) Object.values(R).forEach(x => { if(!x || x.missing || !x.bear) return; const rel = s => s && s.auc!=null && s.auc >= 0.65;
       o.pv[x.id] = { label: x.label, b: Math.round(x.bear.now.p*100), u: Math.round(x.bull.now.p*100), sb: x.bear.now.sc, su: x.bull.now.sc, baseB: Math.round(x.bear.st.base*100), baseU: Math.round(x.bull.st.base*100), relB: rel(x.bear.st), relU: rel(x.bull.st), phase: x.phase ? x.phase.k : null, dd: x.phase ? Math.round(x.phase.dd) : null }; }); }catch(e){}
     try{ const dots = [...document.querySelectorAll('.fresh-dot.fail')]; o.fails = [...new Set(dots.map(el => { const c = el.closest('.card, .gauge-card, [class*=card]'); const k = c && c.querySelector('.k, h3, .title-row'); return ((k && k.textContent) || el.id).replace(/\s+/g,' ').trim().slice(0, 50); }))]; }catch(e){}
     try{ if(typeof renderMyMetals==='function') renderMyMetals(); const h = JSON.parse(localStorage.getItem('mt_metals_value_history')||'[]'); const last = h[h.length-1]; if(last && last.date === new Date().toISOString().slice(0,10) && last.value > 0) o.mv = { value: Math.round(last.value*100)/100, cost: last.cost!=null ? Math.round(last.cost*100)/100 : null }; }catch(e){}
@@ -120,7 +120,7 @@ try{
       try{ const r = await fetch('https://openapi.sosovalue.com/openapi/v1/etfs/summary-history?symbol=BTC&country_code=US', { headers:{ 'x-soso-api-key': k } }); const t = await r.text(); return r.status + ' ' + t.slice(0, 600); }catch(e){ return 'erreur ' + e.message; }
     });
     console.log('::notice title=SoSoValue::' + esc(soso));
-    const pv = await page.evaluate(() => { const P = window.__pv; if(!P || !P.res) return 'non calculée'; return (P.err && P.err.length ? 'manquant : ' + P.err.join(', ') + '\n' : '') + Object.values(P.res).map(R => R.missing ? R.label + ' : indisponible ' + (R.why||'') : `${R.label} : baisse ${Math.round(R.bear.now.p*100)} % (fiab. ${Math.round((R.bear.st.auc||0)*100)}) · hausse ${Math.round(R.bull.now.p*100)} % (fiab. ${Math.round((R.bull.st.auc||0)*100)}) · ${R.phase ? R.phase.t : ''}`).join('\n'); });
+    const pv = await page.evaluate(() => { const P = window.__pv; if(!P || !P.res) return 'non calculée'; return (P.err && P.err.length ? 'manquant : ' + P.err.join(', ') + '\n' : '') + Object.values(P.res).filter(R => R && (R.bear || R.missing)).map(R => R.missing ? R.label + ' : indisponible ' + (R.why||'') : `${R.label} : baisse ${Math.round(R.bear.now.p*100)} % (fiab. ${Math.round((R.bear.st.auc||0)*100)}) · hausse ${Math.round(R.bull.now.p*100)} % (fiab. ${Math.round((R.bull.st.auc||0)*100)}) · ${R.phase ? R.phase.t : ''}`).join('\n'); });
     console.log('::notice title=Prevision::' + esc(pv));
     const fed = await page.evaluate(() => JSON.stringify(window.__fedOutlook || window.__fedProbs || null));
     console.log('::notice title=Fed::' + esc(fed));
