@@ -106,7 +106,7 @@ try{
     for(let i=0;i<localStorage.length;i++){ const k = localStorage.key(i); if(re.test(k)) ls[k] = localStorage.getItem(k); }
     const idb = await new Promise(res => { const rq = indexedDB.open('mt_cache_db', 1); rq.onupgradeneeded = () => rq.result.createObjectStore('cache');
       rq.onsuccess = () => { const s = rq.result.transaction('cache', 'readonly').objectStore('cache'); const a = s.getAllKeys(), b = s.getAll(); let n = 0;
-        const fin = () => { if(++n < 2) return; const o = {}, lim = Date.now() - 12*86400000; a.result.forEach((k, i) => { const v = b.result[i]; if(v && v.ts && v.ts < lim) return; o[k] = v; }); res(o); };
+        const fin = () => { if(++n < 2) return; const o = {}, lim = Date.now() - 12*86400000; a.result.forEach((k, i) => { const v = b.result[i]; if(v && v.ts && v.ts < lim) return; if(String(k).startsWith('mt_netcache_') && v && typeof v.text==='string' && v.text.length > 40000) return; /* pages brutes volumineuses : déjà lues, inutile de les envoyer au téléphone */ o[k] = v; }); res(o); };
         a.onsuccess = fin; b.onsuccess = fin; a.onerror = () => res({}); };
       rq.onerror = () => res({}); });
     return { ls, idb };
