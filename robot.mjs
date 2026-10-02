@@ -124,6 +124,8 @@ try{
     console.log('::notice title=Prevision::' + esc(pv));
     const fed = await page.evaluate(() => JSON.stringify(window.__fedOutlook || window.__fedProbs || null));
     console.log('::notice title=Fed::' + esc(fed));
+    const bp = await page.evaluate(() => { const b = window.__pv && window.__pv.res && window.__pv.res.bonprix; return b ? JSON.stringify({ now: b.now && Math.round(b.now.s), zones: b.zones.map(z => z.k+' '+z.n+' '+Math.round(z.g*10)/10), alerte: Math.round((b.alert.g||0)*10)/10 }) : 'absent'; });
+    console.log('::notice title=BonPrix::' + esc(bp));
   }
   // 3) on récupère l'état (filtré) et on le chiffre
   const st = await page.evaluate(async reSrc => {
