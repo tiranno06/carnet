@@ -158,6 +158,8 @@ try{
     console.log('::notice title=BonPrix::' + esc(bp));
     const noms = await page.evaluate(() => ['traditional','crypto','metals','france','cross'].map(k => { try{ const M = svModel(k); return k + ' : ' + M.fams.map(f => '[' + f.name + '] ' + f.rows.map(r => r.name).join(' | ')).join(' ; '); }catch(e){ return k + ' : ' + e.message; } }).join('\n'));
     console.log('::notice title=Indicateurs::' + esc(noms));
+    const bul = (jour && jour.bul) ? Object.values(jour.bul).map(x => `${x.l} ${x.b}/${x.u}`).join(' · ') : 'absent';
+    console.log('::notice title=Direct::' + esc(`lectures directes sans intermédiaire : ${direct.ok}, repli : ${direct.repli}\nBulletin : ${bul}`));
   }
   // 3) on récupère l'état (filtré) et on le chiffre
   const st = await page.evaluate(async reSrc => {
