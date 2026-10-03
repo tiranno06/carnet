@@ -29,7 +29,9 @@ export function enregistrer(H, st){
   H.v = 1; H.days = H.days || {}; H.alerts = H.alerts || {};
   const { date } = parisNow();
   const pv = {}; Object.entries(st.pv || {}).forEach(([id, x]) => { pv[id] = { b: x.b, u: x.u, sb: x.sb, su: x.su }; });
-  H.days[date] = { t: st.t, pv, ...(st.mv ? { mv: st.mv } : {}) };
+  H.days[date] = Object.assign(H.days[date] || {}, { t: st.t, pv }, st.mv ? { mv: st.mv } : {});
+  // scores de chaque indicateur, jour par jour (les 60 derniers jours de l'appareil du robot, puis l'historique s'allonge)
+  Object.entries(st.sv || {}).forEach(([d, v]) => { if(/^\d{4}-\d{2}-\d{2}$/.test(d) && v) (H.days[d] = H.days[d] || {}).sv = v; });
   return H;
 }
 

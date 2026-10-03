@@ -14,7 +14,7 @@ if(!existsSync('app.enc')){ say("aucune application publiée pour l'instant : ri
 if(!MDP){ say('secret MOT_DE_PASSE pas encore configuré : rien à faire'); process.exit(0); }
 
 // mêmes familles de données que la page reprend (jamais de clé, jamais de donnée personnelle)
-const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision)/;
+const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist)/;
 
 const key = await cle(MDP, JSON.parse(readFileSync('sel.json', 'utf8')));
 let html;
@@ -61,7 +61,7 @@ try{
   await page.goto(base + '/vide');
   await page.evaluate(async snap => {
     localStorage.clear();
-    localStorage.setItem('mt_anim', '0'); localStorage.setItem('mt_economy_mode', '0'); localStorage.setItem('mt_scheduler_off', '1');
+    localStorage.setItem('mt_anim', '0'); localStorage.setItem('mt_economy_mode', '0'); localStorage.setItem('mt_scheduler_off', '1'); localStorage.setItem('mt_ultra_simple', '0'); // 03/10 : vue complète, pour que chaque onglet charge ses données
     if(!snap) return;
     Object.entries(snap.ls || {}).forEach(([k, v]) => { try{ localStorage.setItem(k, v); }catch(e){} });
     await new Promise(res => { const rq = indexedDB.open('mt_cache_db', 1); rq.onupgradeneeded = () => rq.result.createObjectStore('cache');
@@ -75,6 +75,7 @@ try{
   await page.waitForFunction(() => (window.__lastRefreshAllAt || 0) > 0, null, { timeout: 120000, polling: 1000 });
   await page.waitForFunction(() => typeof refreshing !== 'undefined' && !refreshing, null, { timeout: 360000, polling: 2000 });
   say('actualisation principale terminée');
+  await page.evaluate(() => { try{ if(localStorage.getItem('mt_ultra_simple')==='1') applyUltraSimpleView(false); }catch(e){} }); // sinon switchTab ne fait rien
   for(const tab of ['crypto', 'cross', 'mymetals', 'france', 'traditional']){
     await page.evaluate(t => { try{ switchTab(t); }catch(e){} }, tab);
     await idle(5000, 45000);
@@ -87,6 +88,7 @@ try{
   // relevé du jour : températures, probabilités, sources en panne, valeur de ton stock
   const jour = await page.evaluate(() => {
     const o = { t:{}, pv:{}, fails:[], mv:null };
+    try{ o.sv = JSON.parse(localStorage.getItem('mt_sv_hist')||'{}'); }catch(e){}
     for(const k of ['traditional','crypto','metals','france','cross']){ try{ const v = svModel(k).temp; if(v!=null && isFinite(v)) o.t[k] = Math.round(v*10)/10; }catch(e){} }
     try{ const R = window.__pv && window.__pv.res; if(R) Object.values(R).forEach(x => { if(!x || x.missing || !x.bear) return; const rel = s => s && s.auc!=null && s.auc >= 0.65;
       o.pv[x.id] = { label: x.label, b: Math.round(x.bear.now.p*100), u: Math.round(x.bull.now.p*100), sb: x.bear.now.sc, su: x.bull.now.sc, baseB: Math.round(x.bear.st.base*100), baseU: Math.round(x.bull.st.base*100), relB: rel(x.bear.st), relU: rel(x.bull.st), phase: x.phase ? x.phase.k : null, dd: x.phase ? Math.round(x.phase.dd) : null }; }); }catch(e){}
