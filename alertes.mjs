@@ -30,6 +30,7 @@ export function enregistrer(H, st){
   const { date } = parisNow();
   const pv = {}; Object.entries(st.pv || {}).forEach(([id, x]) => { pv[id] = { b: x.b, u: x.u, sb: x.sb, su: x.su }; });
   H.days[date] = Object.assign(H.days[date] || {}, { t: st.t, pv }, st.mv ? { mv: st.mv } : {});
+  if(st.bul) H.bul = { date, notes: st.bul }; // dernier bulletin de notes (n°10)
   // scores de chaque indicateur, jour par jour (les 60 derniers jours de l'appareil du robot, puis l'historique s'allonge)
   Object.entries(st.sv || {}).forEach(([d, v]) => { if(/^\d{4}-\d{2}-\d{2}$/.test(d) && v) (H.days[d] = H.days[d] || {}).sv = v; });
   return H;
@@ -73,6 +74,15 @@ export function alertes(H, st, subs){
     const pvl = Object.values(st.pv || {}).filter(x => x.relB).map(x => `${x.label} : baisse ${x.b} %, hausse ${x.u} %`);
     msgs.hebdo.push('Températures : ' + lines.join(' · ') + (pvl.length ? '\nPrévision 12 mois : ' + pvl.join(' · ') : ''));
   }
+  // 5. bulletin de notes de la Prévision : une fois par mois (au premier passage du mois, à partir de 9 h)
+  msgs.bulletin = [];
+  const mois = now.date.slice(0, 7);
+  if(st.bul && Object.keys(st.bul).length && A.bul !== mois && now.hour >= 9){
+    A.bul = mois;
+    const n = v => v==null ? '—' : v + '/20';
+    const lines = Object.values(st.bul).map(x => `${x.l} : baisse ${n(x.b)}, hausse ${n(x.u)}${x.lb!=null ? ` (vraies prévisions : ${n(x.lb)} / ${n(x.lu)})` : ''}`);
+    msgs.bulletin.push('10/20 = pas mieux que la moyenne, 20/20 = parfait.\n' + lines.join('\n'));
+  }
   // préparation des notifications, par appareil et selon ses préférences
   A.seen = A.seen || [];
   const out = [];
@@ -85,6 +95,7 @@ export function alertes(H, st, subs){
     if(pr.prevision && msgs.prevision.length) parts.push(...msgs.prevision);
     if(parts.length) out.push({ s, title: parts.length === 1 ? 'Carnet : un changement' : `Carnet : ${parts.length} changements`, body: parts.join('\n'), url: msgs.prevision.length && pr.prevision ? './?vue=prevision' : './', tag:'carnet-alerte' });
     if(pr.hebdo && msgs.hebdo.length) out.push({ s, title:'📅 Carnet : résumé de la semaine', body: msgs.hebdo[0], url:'./', tag:'carnet-hebdo' });
+    if(pr.hebdo && msgs.bulletin.length) out.push({ s, title:'📝 Carnet : bulletin de notes de la Prévision', body: msgs.bulletin[0], url:'./?vue=prevision', tag:'carnet-bulletin' });
     if(pr.pannes && msgs.pannes.length) out.push({ s, title:'⚠️ Carnet : source de données en panne', body: msgs.pannes.join(', ') + ' — en échec depuis 3 passages du robot.', url:'./', tag:'carnet-panne' });
   }
   A.seen = (subs || []).map(s => s && s.id).filter(Boolean);

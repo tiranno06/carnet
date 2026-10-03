@@ -38,6 +38,7 @@ const srv = http.createServer((req, res) => {
 await new Promise(r => srv.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${srv.address().port}`;
 
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36';
 const browser = await chromium.launch({
   executablePath: process.env.CHROME || '/usr/bin/google-chrome', headless: true,
   args: ['--disable-web-security', '--disable-features=IsolateOrigins,site-per-process', '--no-first-run'],
@@ -45,10 +46,31 @@ const browser = await chromium.launch({
 let code = 0;
 try{
   const ctx = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+    userAgent: UA,
     locale: 'fr-FR', timezoneId: 'Europe/Paris', viewport: { width: 1300, height: 900 },
   });
   await ctx.addInitScript(() => { window.__GMS_ROBOT = true; try{ window.Notification = undefined; }catch(e){} });
+  // 04/10 (n°5) : ici, pas besoin des intermédiaires gratuits (seep, allorigins, corsmirror…) : le robot lit
+  // directement le site visé et rend la réponse à la page. Si le site refuse, on repasse par l'intermédiaire.
+  const RELAIS = [
+    [/^https:\/\/seep\.eu\.org\/(https?:\/\/.+)$/, m => m[1]],
+    [/^https:\/\/api\.allorigins\.win\/raw\?url=([^&]+)/, m => decodeURIComponent(m[1])],
+    [/^https:\/\/corsmirror\.com\/v1\?url=([^&]+)/, m => decodeURIComponent(m[1])],
+    [/^https:\/\/cors-get-proxy\.sirjosh\.workers\.dev\/\?url=([^&]+)/, m => decodeURIComponent(m[1])],
+    [/^https:\/\/corsmirror\.onrender\.com\/v1\/cors\?url=([^&]+)/, m => decodeURIComponent(m[1])],
+  ];
+  const direct = { ok: 0, repli: 0 };
+  await ctx.route(/^https:\/\/(seep\.eu\.org|api\.allorigins\.win|corsmirror\.com|cors-get-proxy\.sirjosh\.workers\.dev|corsmirror\.onrender\.com)\//, async route => {
+    const rq = route.request(); let cible = null;
+    for(const [re, f] of RELAIS){ const m = rq.url().match(re); if(m){ try{ cible = f(m); }catch(e){} break; } }
+    if(!cible || rq.method() !== 'GET') return route.continue().catch(() => {});
+    try{
+      const r = await route.fetch({ url: cible, headers: { 'user-agent': UA, 'accept': '*/*', 'accept-language': 'fr-FR,fr;q=0.9,en;q=0.8' }, timeout: 15000 });
+      if(r.status() >= 400){ direct.repli++; return route.continue().catch(() => {}); }
+      direct.ok++;
+      return route.fulfill({ status: r.status(), body: await r.body(), headers: { 'content-type': r.headers()['content-type'] || 'text/plain; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
+    }catch(e){ direct.repli++; return route.continue().catch(() => {}); }
+  });
   const page = await ctx.newPage();
   page.on('dialog', d => d.dismiss().catch(() => {}));
   let inflight = 0, lastNet = Date.now();
@@ -85,6 +107,7 @@ try{
   await page.evaluate(() => { try{ if(typeof pvCompute==='function') pvCompute(false); }catch(e){} });
   await page.waitForFunction(() => !window.__pv || window.__pv.done, null, { timeout: 240000, polling: 2000 }).catch(() => say('prévision : pas finie à temps'));
   say('prévision calculée');
+  say(`lectures directes sans intermédiaire : ${direct.ok} (repli sur l'intermédiaire : ${direct.repli})`);
   // relevé du jour : températures, probabilités, sources en panne, valeur de ton stock
   const jour = await page.evaluate(() => {
     const o = { t:{}, pv:{}, fails:[], mv:null };
@@ -96,6 +119,11 @@ try{
     try{ if(typeof renderMyMetals==='function') renderMyMetals(); const h = JSON.parse(localStorage.getItem('mt_metals_value_history')||'[]'); const last = h[h.length-1]; if(last && last.date === new Date().toISOString().slice(0,10) && last.value > 0) o.mv = { value: Math.round(last.value*100)/100, cost: last.cost!=null ? Math.round(last.cost*100)/100 : null }; }catch(e){}
     return o;
   });
+  // 04/10 (n°10) : bulletin de notes de la Prévision (test honnête + vraies prévisions relevées par le robot)
+  try{
+    const pvDays = {}; Object.entries(H.days || {}).forEach(([d, x]) => { if(x && x.pv) pvDays[d] = { pv: x.pv }; });
+    jour.bul = await page.evaluate(days => { try{ const B = pvBulletin(null, { days }); const o = {}; Object.entries(B).forEach(([id, x]) => { o[id] = { l: x.label, b: x.test.bear ? x.test.bear.note : null, u: x.test.bull ? x.test.bull.note : null, lb: x.live.bear && x.live.bear.note!=null ? x.live.bear.note : null, lu: x.live.bull && x.live.bull.note!=null ? x.live.bull.note : null }; }); return o; }catch(e){ return null; } }, pvDays);
+  }catch(e){}
   enregistrer(H, jour);
   const al = alertes(H, jour, subs);
   say(`relevé du jour enregistré (${Object.keys(H.days).length} jours) ; alertes : ${Object.entries(al.counts).map(([k, n]) => k + ' ' + n).join(', ')}`);
@@ -128,6 +156,8 @@ try{
     console.log('::notice title=Fed::' + esc(fed));
     const bp = await page.evaluate(() => { const b = window.__pv && window.__pv.res && window.__pv.res.bonprix; return b ? JSON.stringify({ now: b.now && Math.round(b.now.s), zones: b.zones.map(z => z.k+' '+z.n+' '+Math.round(z.g*10)/10), alerte: Math.round((b.alert.g||0)*10)/10 }) : 'absent'; });
     console.log('::notice title=BonPrix::' + esc(bp));
+    const noms = await page.evaluate(() => ['traditional','crypto','metals','france','cross'].map(k => { try{ const M = svModel(k); return k + ' : ' + M.fams.map(f => '[' + f.name + '] ' + f.rows.map(r => r.name).join(' | ')).join(' ; '); }catch(e){ return k + ' : ' + e.message; } }).join('\n'));
+    console.log('::notice title=Indicateurs::' + esc(noms));
   }
   // 3) on récupère l'état (filtré) et on le chiffre
   const st = await page.evaluate(async reSrc => {
