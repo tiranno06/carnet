@@ -14,7 +14,7 @@ if(!existsSync('app.enc')){ say("aucune application publiée pour l'instant : ri
 if(!MDP){ say('secret MOT_DE_PASSE pas encore configuré : rien à faire'); process.exit(0); }
 
 // mêmes familles de données que la page reprend (jamais de clé, jamais de donnée personnelle)
-const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist)/;
+const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl)/;
 
 const key = await cle(MDP, JSON.parse(readFileSync('sel.json', 'utf8')));
 let html;
@@ -158,6 +158,8 @@ try{
     console.log('::notice title=BonPrix::' + esc(bp));
     const noms = await page.evaluate(() => ['traditional','crypto','metals','france','cross'].map(k => { try{ const M = svModel(k); return k + ' : ' + M.fams.map(f => '[' + f.name + '] ' + f.rows.map(r => r.name).join(' | ')).join(' ; '); }catch(e){ return k + ' : ' + e.message; } }).join('\n'));
     console.log('::notice title=Indicateurs::' + esc(noms));
+    const repl = await page.evaluate(async () => { const out = []; for(const id of ['TWEXBMTH','GOLDPMGBD228NLBM','DEXUSEU']){ try{ out.push(id + ' → ' + JSON.stringify(await fredFindReplacement(id, true))); }catch(e){ out.push(id + ' : ' + e.message); } } return out.join('\n'); });
+    console.log('::notice title=Remplacements FRED::' + esc(repl));
     const bul = (jour && jour.bul) ? Object.values(jour.bul).map(x => `${x.l} ${x.b}/${x.u}`).join(' · ') : 'absent';
     console.log('::notice title=Direct::' + esc(`lectures directes sans intermédiaire : ${direct.ok}, repli : ${direct.repli}\nBulletin : ${bul}`));
   }

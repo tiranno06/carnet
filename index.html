@@ -67,7 +67,7 @@ var GMS = (function(){
   }
   function saveOffline(app, data){ return store('gms_shell', 'readwrite', function(st){ if(app) st.put(app, 'app'); if(data) st.put(data, 'data'); }); }
   function loadOffline(){ var out = {}; return store('gms_shell', 'readonly', function(st){ st.get('app').onsuccess = function(e){ out.app = e.target.result; }; st.get('data').onsuccess = function(e){ out.data = e.target.result; }; }).then(function(){ return out; }); }
-  var OVERWRITE = /^mt_(snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist)/;
+  var OVERWRITE = /^mt_(snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl)/;
   function J(k, d){ try{ var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } }
   // données apportées par le robot : fusion avec celles de l'appareil
   function importSnap(snap){
