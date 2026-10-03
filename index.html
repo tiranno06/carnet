@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0b0d12">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Carnet">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Carnet</title>
+<style>
+  :root{--bg:#0b0d12;--panel:#141821;--line:#262c38;--tx:#e8ebf2;--dim:#8b93a5;--acc:#e8a33d;--red:#ef5b5b;}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  main{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px 16px}
+  form{width:100%;max-width:360px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 22px}
+  h1{font-size:1.15rem;margin:0 0 4px;font-weight:600}
+  p{color:var(--dim);font-size:.85rem;margin:0 0 18px;line-height:1.45}
+  input[type=password]{width:100%;font-size:1rem;padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:#0e1118;color:var(--tx)}
+  input[type=password]:focus{outline:none;border-color:var(--acc)}
+  label.r{display:flex;gap:8px;align-items:center;font-size:.85rem;color:var(--dim);margin:12px 0 16px;cursor:pointer}
+  button{width:100%;font-size:1rem;font-weight:600;padding:12px;border-radius:10px;border:0;background:var(--acc);color:#111;cursor:pointer;min-height:44px}
+  button.alt{background:transparent;color:var(--tx);border:1px solid var(--line);margin-bottom:14px}
+  button[disabled]{opacity:.6;cursor:wait}
+  #msg{min-height:1.3em;font-size:.85rem;margin-top:12px;color:var(--dim)}
+  #msg.err{color:var(--red)}
+</style>
+</head>
+<body>
+<main>
+  <form id="f" autocomplete="off" hidden>
+    <h1>Carnet</h1>
+    <p>Entre ton mot de passe pour ouvrir.</p>
+    <button type="button" id="bio" class="alt" hidden>🔓 Ouvrir avec l'empreinte</button>
+    <input type="password" id="pw" autocomplete="current-password" aria-label="Mot de passe" required>
+    <label class="r"><input type="checkbox" id="keep" checked> Se souvenir sur cet appareil</label>
+    <button id="go" type="submit">Ouvrir</button>
+    <div id="msg" role="status" aria-live="polite"></div>
+  </form>
+  <div id="wait" style="color:#8b93a5;font-size:.9rem">Ouverture…</div>
+</main>
+<script id="gms-common">
+// Fonctions communes à la page d'ouverture ET à l'application (copiées dans l'application pour la mise à jour en arrière-plan)
+var GMS = (function(){
+  'use strict';
+  var b64 = function(buf){ var s = '', u = new Uint8Array(buf); for(var i=0;i<u.length;i+=0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i+0x8000)); return btoa(s); };
+  var unb64 = function(t){ return Uint8Array.from(atob(t), function(c){ return c.charCodeAt(0); }); };
+  function gunzip(bytes){ return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer().then(function(b){ return new TextDecoder().decode(b); }); }
+  // « no-cache » : le navigateur redemande au site si le fichier a changé (réponse vide s'il n'a pas changé)
+  function getText(name){ return fetch(name, { cache:'no-cache' }).then(function(r){ if(!r.ok) throw new Error(name + ' ' + r.status); return r.text(); }); }
+  function dec(key, txt){ var f = JSON.parse(txt); return crypto.subtle.decrypt({ name:'AES-GCM', iv:unb64(f.iv) }, key, unb64(f.ct)).then(function(pt){ return gunzip(new Uint8Array(pt)); }); }
+  function importRaw(t){ return crypto.subtle.importKey('raw', unb64(t), { name:'AES-GCM' }, true, ['encrypt','decrypt']); }
+  function store(name, mode, fn){
+    return new Promise(function(res){
+      var os = name==='mt_cache_db' ? 'cache' : 'f';
+      var rq = indexedDB.open(name, 1);
+      rq.onupgradeneeded = function(){ rq.result.createObjectStore(os); };
+      rq.onsuccess = function(){ var db = rq.result, tx = db.transaction(os, mode); fn(tx.objectStore(os), res); tx.oncomplete = function(){ res(); }; tx.onerror = function(){ res(); }; };
+      rq.onerror = function(){ res(); };
+    });
+  }
+  function saveOffline(app, data){ return store('gms_shell', 'readwrite', function(st){ if(app) st.put(app, 'app'); if(data) st.put(data, 'data'); }); }
+  function loadOffline(){ var out = {}; return store('gms_shell', 'readonly', function(st){ st.get('app').onsuccess = function(e){ out.app = e.target.result; }; st.get('data').onsuccess = function(e){ out.data = e.target.result; }; }).then(function(){ return out; }); }
+  var OVERWRITE = /^mt_(snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl)/;
+  function J(k, d){ try{ var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } }
+  // données apportées par le robot : fusion avec celles de l'appareil
+  function importSnap(snap){
+    var ls = snap.ls || {};
+    try{
+      Object.keys(ls).forEach(function(k){
+        var v = ls[k];
+        try{
+          if(k === 'mt_sv_hist'){ var L = J(k, {}), R = JSON.parse(v); Object.keys(R).forEach(function(d){ L[d] = L[d] || {}; Object.keys(R[d]).forEach(function(src){ L[d][src] = Object.assign({}, L[d][src] || {}, R[d][src]); }); }); var days = Object.keys(L).sort(); while(days.length > 60) delete L[days.shift()]; localStorage.setItem(k, JSON.stringify(L)); }
+          else if(k === 'mt_history'){ var m = {}; J(k, []).forEach(function(h){ m[h.date] = h; }); JSON.parse(v).forEach(function(h){ m[h.date] = h; }); localStorage.setItem(k, JSON.stringify(Object.keys(m).sort().slice(-90).map(function(d){ return m[d]; }))); }
+          else if(k === 'mt_learned_dates'){ var A = J(k, {}), B = JSON.parse(v); Object.keys(B).forEach(function(kind){ var set = {}; (A[kind]||[]).concat(B[kind]||[]).forEach(function(x){ set[x] = 1; }); A[kind] = Object.keys(set).sort(); }); localStorage.setItem(k, JSON.stringify(A)); }
+          else if(k === 'mt_etf_flows_hist' || k === 'mt_data_freshness'){ localStorage.setItem(k, JSON.stringify(Object.assign(J(k, {}), JSON.parse(v)))); }
+          else if(OVERWRITE.test(k)) localStorage.setItem(k, v);
+        }catch(e){}
+      });
+      localStorage.setItem('mt_robot_at', String(snap.at || 0));
+      if(snap.vapid) localStorage.setItem('mt_vapid_pub', snap.vapid);
+    }catch(e){}
+    var idb = snap.idb || {};
+    return store('mt_cache_db', 'readwrite', function(st){
+      Object.keys(idb).forEach(function(k){
+        var v = idb[k]; if(v == null) return;
+        var g = st.get(k);
+        g.onsuccess = function(){ var cur = g.result; if(!cur || !cur.ts || !v.ts || v.ts >= cur.ts) st.put(v, k); };
+      });
+    });
+  }
+  return { b64:b64, unb64:unb64, getText:getText, dec:dec, importRaw:importRaw, saveOffline:saveOffline, loadOffline:loadOffline, importSnap:importSnap };
+})();
+</script>
+<script id="gms-bg">
+// Dans l'application : mise à jour en arrière-plan (nouvelles données du robot, nouvelle version, historique)
+window.__gmsBgStart = function(firstDelay){
+  if(window.__gmsBgOn) return; window.__gmsBgOn = true;
+  var busy = false;
+  function banner(){
+    if(document.getElementById('gms-newver')) return;
+    var d = document.createElement('div'); d.id = 'gms-newver';
+    d.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom));z-index:99999;background:#e8a33d;color:#111;font:600 14px system-ui,sans-serif;padding:10px 16px;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.4);cursor:pointer';
+    d.textContent = '🆕 Nouvelle version disponible — toucher pour l’ouvrir'; d.onclick = function(){ location.reload(); };
+    document.body.appendChild(d);
+  }
+  function check(){
+    if(busy || !window.__gmsKey || document.hidden) return; busy = true;
+    var key = window.__gmsKey, cur = window.__gmsCur || (window.__gmsCur = {});
+    Promise.all([GMS.getText('data.enc').catch(function(){ return null; }), GMS.getText('app.enc').catch(function(){ return null; }), GMS.getText('historique.enc').catch(function(){ return null; })]).then(function(r){
+      var data = r[0], app = r[1], hist = r[2], jobs = [];
+      if(data && data !== cur.data){
+        jobs.push(GMS.dec(key, data).then(function(t){ var snap = JSON.parse(t); return GMS.importSnap(snap).then(function(){ cur.data = data; window.__gmsRobotAt = snap.at || 0; GMS.saveOffline(null, data); window.dispatchEvent(new CustomEvent('gms-data', { detail: snap.at })); }); }).catch(function(){}));
+      }
+      if(app && cur.app && app !== cur.app){ GMS.saveOffline(app, null); cur.app = app; banner(); }
+      if(hist && hist !== cur.hist){
+        jobs.push(GMS.dec(key, hist).then(function(t){ cur.hist = hist; window.__gmsHist = JSON.parse(t); window.dispatchEvent(new CustomEvent('gms-hist')); }).catch(function(){}));
+      }
+      return Promise.all(jobs);
+    }).catch(function(){}).then(function(){ busy = false; });
+  }
+  setTimeout(check, firstDelay || 2500);
+  setInterval(check, 10*60000);
+  document.addEventListener('visibilitychange', function(){ if(!document.hidden && Date.now() - (window.__gmsBgLast||0) > 5*60000){ window.__gmsBgLast = Date.now(); check(); } });
+};
+</script>
+<script>
+(function(){
+  'use strict';
+  try{ if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function(){}); }catch(e){}
+  var $ = function(id){ return document.getElementById(id); };
+  var COMMON = $('gms-common').textContent, BG = $('gms-bg').textContent;
+  var HEAD_PWA = '<link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon-192.png"><link rel="apple-touch-icon" href="apple-touch-icon.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Carnet"><meta name="theme-color" content="#0b0d12">'
+    + '<script>' + COMMON + '<\/script><script>' + BG + '<\/script>';
+  function derive(pw){
+    return GMS.getText('sel.json').then(function(t){
+      var sel = JSON.parse(t);
+      return crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']).then(function(base){
+        return crypto.subtle.deriveKey({ name:'PBKDF2', salt:GMS.unb64(sel.sel), iterations:sel.iter, hash:'SHA-256' }, base, { name:'AES-GCM', length:256 }, true, ['encrypt','decrypt']);
+      });
+    });
+  }
+  function show(key, html, cur, robotAt, fromNet, beforeShow){
+    return (beforeShow ? beforeShow() : Promise.resolve()).catch(function(){}).then(function(){
+      window.__gmsKey = key; window.__gmsRobotAt = robotAt || 0; window.__gmsOffline = !fromNet; window.__gmsCur = cur;
+      var start = '<script>addEventListener("load",function(){window.__gmsBgStart(' + (fromNet ? 10*60000 : 2500) + ')});<\/script>';
+      var page = String(html).replace(/<head[^>]*>/i, function(m){ return m + HEAD_PWA + start; });
+      document.open(); document.write(page); document.close();
+    });
+  }
+  // 1) OUVERTURE INSTANTANÉE : la dernière copie gardée sur l'appareil s'affiche tout de suite,
+  //    les nouveautés (données du robot, nouvelle version) arrivent ensuite en arrière-plan.
+  function openLocal(key, beforeShow){
+    return GMS.loadOffline().then(function(o){
+      if(!o.app) return false;
+      return GMS.dec(key, o.app).then(function(html){
+        var at = 0; try{ at = +(localStorage.getItem('mt_robot_at')||0); }catch(e){}
+        return show(key, html, { app:o.app, data:o.data }, at, false, beforeShow).then(function(){ return true; });
+      });
+    });
+  }
+  // 2) première ouverture sur cet appareil (ou copie illisible) : tout vient du site
+  function openNet(key, beforeShow){
+    var appTxt, dataTxt;
+    return Promise.all([GMS.getText('app.enc'), GMS.getText('data.enc').catch(function(){ return null; })])
+      .then(function(r){ appTxt = r[0]; dataTxt = r[1]; return GMS.dec(key, appTxt); })
+      .then(function(html){
+        GMS.saveOffline(appTxt, dataTxt);
+        var p = dataTxt ? GMS.dec(key, dataTxt).then(function(t){ return JSON.parse(t); }).catch(function(){ return null; }) : Promise.resolve(null);
+        return p.then(function(snap){ return (snap ? GMS.importSnap(snap) : Promise.resolve()).then(function(){ return show(key, html, { app:appTxt, data:dataTxt }, snap ? snap.at : 0, true, beforeShow); }); });
+      });
+  }
+  function open(key, beforeShow){
+    return openLocal(key, beforeShow).catch(function(){ return false; }) // copie illisible (ex. mot de passe changé) : on passe par le site
+      .then(function(done){ return done ? true : openNet(key, beforeShow); });
+  }
+  function showForm(err){
+    $('wait').hidden = true; $('f').hidden = false; $('go').disabled = false;
+    $('msg').textContent = err || ''; $('msg').className = err ? 'err' : '';
+    try{ if(localStorage.getItem('gms_bio')) $('bio').hidden = false; }catch(e){}
+    if($('bio').hidden) $('pw').focus();
+  }
+  function errText(e, saved){
+    var m = String(e && (e.message || e.name) || e);
+    if(/app\.enc 404/.test(m)) return "Le site n'est pas encore prêt : réessaie dans quelques minutes.";
+    if(/réseau|Failed to fetch|NetworkError/i.test(m)) return saved ? 'Pas de connexion internet (et aucune copie enregistrée sur cet appareil).' : 'Pas de connexion internet.';
+    return null;
+  }
+  $('f').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var pw = $('pw').value; if(!pw) return;
+    $('go').disabled = true; $('msg').className = ''; $('msg').textContent = 'Vérification…';
+    derive(pw).then(function(key){
+      return open(key, function(){
+        return crypto.subtle.exportKey('raw', key).then(function(raw){ try{ if(!localStorage.getItem('gms_bio')) ($('keep').checked ? localStorage : sessionStorage).setItem('gms_k', GMS.b64(raw)); }catch(e){} });
+      });
+    }).catch(function(e){ showForm(errText(e) || 'Mot de passe incorrect.'); });
+  });
+  // 21) déverrouillage par empreinte (clé d'accès avec extension PRF : l'empreinte libère la clé, rien n'est envoyé)
+  $('bio').addEventListener('click', function(){
+    var b; try{ b = JSON.parse(localStorage.getItem('gms_bio')); }catch(e){}
+    if(!b) return;
+    $('msg').className = ''; $('msg').textContent = 'Empreinte…';
+    navigator.credentials.get({ publicKey:{ challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: location.hostname, allowCredentials:[{ type:'public-key', id: GMS.unb64(b.id) }], userVerification:'required', timeout: 60000, extensions:{ prf:{ eval:{ first: GMS.unb64(b.salt) } } } } })
+      .then(function(c){
+        var r = c.getClientExtensionResults(); var out = r && r.prf && r.prf.results && r.prf.results.first;
+        if(!out) throw new Error('prf');
+        return crypto.subtle.importKey('raw', out, { name:'AES-GCM' }, false, ['decrypt']).then(function(w){ return crypto.subtle.decrypt({ name:'AES-GCM', iv: GMS.unb64(b.iv) }, w, GMS.unb64(b.ct)); });
+      })
+      .then(function(raw){ return GMS.importRaw(GMS.b64(raw)); })
+      .then(function(k){ $('msg').textContent = 'Ouverture…'; return open(k); })
+      .catch(function(e){ showForm(e && e.name === 'NotAllowedError' ? 'Empreinte annulée.' : (errText(e) || "L'empreinte n'a pas fonctionné : utilise ton mot de passe.")); });
+  });
+  var saved = null; try{ saved = localStorage.getItem('gms_k') || sessionStorage.getItem('gms_k'); }catch(e){}
+  if(!window.crypto || !crypto.subtle || !window.DecompressionStream){ showForm('Ce navigateur est trop ancien pour ouvrir ce carnet.'); return; }
+  if(saved){ GMS.importRaw(saved).then(function(k){ return open(k); }).catch(function(e){
+    var t = errText(e, true); if(t) return showForm(t);
+    try{ localStorage.removeItem('gms_k'); sessionStorage.removeItem('gms_k'); }catch(_){} showForm('Le mot de passe a changé : entre le nouveau.');
+  }); }
+  else showForm();
+})();
+</script>
+</body>
+</html>
