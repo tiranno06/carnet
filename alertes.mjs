@@ -34,7 +34,14 @@ export function enregistrer(H, st){
   if(st.dca && st.dca.world){ const mo = date.slice(0, 7); H.dca = H.dca || {}; if(!H.dca[mo]) H.dca[mo] = { d: date, m: st.dca.m, rule: st.dca.rule, world: st.dca.world }; H.dcaLast = { d: date, world: st.dca.world }; }
   // 09/10 (n°10) : bulletin du matin, préparé au premier passage après 6 h (heure de Paris)
   if(st.matin && st.matin.length && parisNow().hour >= 6 && (!H.matin || H.matin.date !== date)) H.matin = { date, at: Date.now(), lines: st.matin };
-  if(st.bul) H.bul = { date, notes: st.bul }; // dernier bulletin de notes (n°10)
+  if(st.bul){ H.bul = { date, notes: st.bul }; H.bulHist = H.bulHist || {}; H.bulHist[date.slice(0, 7)] = st.bul; } // dernier bulletin de notes (n°10) + 09/10 : notes de chaque mois
+  // 09/10 (n°9) : santé des sources — par jour, nombre de passages et échecs de chaque source (35 derniers jours)
+  if(st.allSrc && st.allSrc.length){
+    const S = H.sante = H.sante || { jours:{}, vu:{} }; S.der = S.der || {}; const j = S.jours[date] = S.jours[date] || { n: 0, f: {} };
+    j.n++; (st.fails || []).forEach(n => { j.f[n] = (j.f[n] || 0) + 1; });
+    st.allSrc.forEach(n => { if(!S.vu[n]) S.vu[n] = date; S.der[n] = date; });
+    const lim = new Date(Date.now() - 35*86400000).toISOString().slice(0, 10); Object.keys(S.jours).forEach(d => { if(d < lim) delete S.jours[d]; });
+  }
   // scores de chaque indicateur, jour par jour (les 60 derniers jours de l'appareil du robot, puis l'historique s'allonge)
   Object.entries(st.sv || {}).forEach(([d, v]) => { if(/^\d{4}-\d{2}-\d{2}$/.test(d) && v) (H.days[d] = H.days[d] || {}).sv = v; });
   return H;
