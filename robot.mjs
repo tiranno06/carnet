@@ -144,8 +144,9 @@ try{
   jour.wl = wl;
   // 09/10 (n°12) : liens « Vérifier sur… » contrôlés une fois par semaine (4 à la fois, sans rafale)
   try{
-    if(!H.liens || Date.now() - H.liens.at > 6.5*86400000){
-      const L = await page.evaluate(() => { const o = {}; document.querySelectorAll('a[href^="http"]').forEach(a => { if(!/v[ée]rifier/i.test(a.textContent)) return; const c = a.closest('.card, .gauge-card, [class*=card]'); const k = c && c.querySelector('.k, h3, .title-row'); const n = ((k && k.textContent) || a.textContent).replace(/\s+/g,' ').trim().slice(0, 60); if(!o[a.href]) o[a.href] = n; }); return Object.entries(o).map(([u, n]) => ({ u, n })); });
+    const L = await page.evaluate(() => { const o = {}; document.querySelectorAll('a[href^="http"]').forEach(a => { if(!/v[ée]rifier/i.test(a.textContent)) return; const c = a.closest('.card, .gauge-card, [class*=card]'); const k = c && c.querySelector('.k, h3, .title-row'); const n = ((k && k.textContent) || a.textContent).replace(/\s+/g,' ').trim().slice(0, 60); if(!o[a.href]) o[a.href] = n; }); return Object.entries(o).map(([u, n]) => ({ u, n: n.split('·')[0].trim() })); });
+    // une fois par semaine, ou tout de suite si un lien signalé cassé a été corrigé entre-temps
+    if(!H.liens || Date.now() - H.liens.at > 6.5*86400000 || (H.liens.pb || []).some(x => x.c === 'casse' && !L.some(y => y.u === x.u))){
       const pb = []; let i = 0;
       const one = async ({ u, n }) => { try{ const r = await fetch(u, { headers: { 'user-agent': UA, 'accept': 'text/html,*/*', 'accept-language': 'fr-FR,fr;q=0.9' }, redirect: 'follow', signal: AbortSignal.timeout(12000) });
           if(r.status >= 400) pb.push({ n, u, c: [401, 403, 429, 999].includes(r.status) || (r.status === 503 && /cloudflare/i.test(r.headers.get('server')||'')) ? 'bloque' : 'casse', h: 'HTTP ' + r.status });
