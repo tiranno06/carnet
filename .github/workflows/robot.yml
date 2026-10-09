@@ -1,24 +1,25 @@
 name: robot
 on:
   schedule:
-    - cron: '23 * * * *'        # toutes les heures
+    - cron: '23 * * * *'        # toutes les heures (GitHub en saute souvent : le veilleur surveille)
     - cron: '53 13-20 * * 1-5'  # + toutes les 30 min pendant la séance de Wall Street (heure UTC)
   workflow_dispatch:
 permissions:
   contents: write
-  pages: write
-  id-token: write
+  actions: write   # pour lancer la publication du site (tâche « site », séparée)
 concurrency:
   group: robot
   cancel-in-progress: false
+# 09/10 : plus d'étape « autorisation de publication » ici. Le 06/10, un passage est resté coincé 2 jours sur
+# cette étape et a bloqué tous les suivants. La publication du site est maintenant une tâche à part (site.yml) :
+# si elle se coince, le robot continue et la publication suivante remplace celle qui est coincée.
+# Briques désignées par leur empreinte exacte (une version piratée plus tard ne pourrait pas s'y glisser).
 jobs:
   robot:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    environment:
-      name: github-pages
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: État précédent
         run: git fetch -q --depth=1 origin site && git worktree add -q site FETCH_HEAD || echo "premier passage"
       - name: Fichiers chiffrés de la branche coffre
@@ -26,10 +27,11 @@ jobs:
           git fetch -q --depth=1 origin coffre || exit 0
           git show FETCH_HEAD:coffre.enc > coffre.enc 2>/dev/null || rm -f coffre.enc
           git show FETCH_HEAD:abonnements.enc > abonnements.enc 2>/dev/null || rm -f abonnements.enc
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
-      - run: npm install --no-audit --no-fund --silent
+          cache: npm
+      - run: npm ci --no-audit --no-fund
       - name: Passage du robot
         run: node robot.mjs
         env:
@@ -42,9 +44,8 @@ jobs:
           git add -A
           git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -qm maj
           git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site
-      - if: hashFiles('out/data.enc') != ''
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: out
-      - if: hashFiles('out/data.enc') != ''
-        uses: actions/deploy-pages@v4
+      - name: Publier le site (tâche séparée)
+        if: hashFiles('out/data.enc') != ''
+        run: |
+          curl -sf -X POST -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/site.yml/dispatches" -d '{"ref":"main"}' && echo "publication lancée" || echo "publication non lancée : le veilleur s'en chargera"

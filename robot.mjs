@@ -158,7 +158,7 @@ try{
     console.log('::notice title=BonPrix::' + esc(bp));
     const noms = await page.evaluate(() => ['traditional','crypto','metals','france','cross'].map(k => { try{ const M = svModel(k); return k + ' : ' + M.fams.map(f => '[' + f.name + '] ' + f.rows.map(r => r.name).join(' | ')).join(' ; '); }catch(e){ return k + ' : ' + e.message; } }).join('\n'));
     console.log('::notice title=Indicateurs::' + esc(noms));
-    const repl = await page.evaluate(async () => { const out = []; for(const id of ['TWEXBMTH','GOLDPMGBD228NLBM','DEXUSEU']){ try{ out.push(id + ' → ' + JSON.stringify(await fredFindReplacement(id, true))); }catch(e){ out.push(id + ' : ' + e.message); } } return out.join('\n'); });
+    const repl = await page.evaluate(async () => { const out = []; for(const id of ['TWEXBMTH','DEXUSEU']){ try{ out.push(id + ' → ' + JSON.stringify(await fredFindReplacement(id, true))); }catch(e){ out.push(id + ' : ' + e.message); } } return out.join('\n'); });
     console.log('::notice title=Remplacements FRED::' + esc(repl));
     const bul = (jour && jour.bul) ? Object.values(jour.bul).map(x => `${x.l} ${x.b}/${x.u}`).join(' · ') : 'absent';
     console.log('::notice title=Direct::' + esc(`lectures directes sans intermédiaire : ${direct.ok}, repli : ${direct.repli}\nBulletin : ${bul}`));

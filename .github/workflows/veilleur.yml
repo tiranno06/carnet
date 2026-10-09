@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 permissions:
   actions: write
-  contents: read
+  contents: write   # état du veilleur (branche « veilleur ») et signe de vie mensuel
 concurrency:
   group: veilleur
   cancel-in-progress: true
@@ -14,15 +14,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Abonnements chiffrés (branche coffre)
         run: |
           git fetch -q --depth=1 origin coffre || exit 0
           git show FETCH_HEAD:abonnements.enc > abonnements.enc 2>/dev/null || rm -f abonnements.enc
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
-      - run: npm install --no-audit --no-fund --silent
+          cache: npm
+      - run: npm ci --no-audit --no-fund
       - name: Vérification du robot
         run: node veilleur.mjs
         env:
