@@ -126,6 +126,10 @@ window.__gmsBgStart = function(firstDelay){
     }).catch(function(){}).then(function(){ busy = false; });
   }
   setTimeout(check, firstDelay || 2500);
+  // 09/10 : l'historique du robot (courbes, « depuis ta dernière visite », bulletin du matin…) est lu tout de suite,
+  // même quand l'application vient d'être téléchargée (sinon il n'arrivait qu'au bout de 10 min)
+  if(firstDelay && firstDelay > 5000) setTimeout(function(){ var key = window.__gmsKey, cur = window.__gmsCur || (window.__gmsCur = {}); if(!key || cur.hist) return;
+    GMS.getText('historique.enc').then(function(hist){ if(!hist || cur.hist) return; return GMS.dec(key, hist).then(function(t){ cur.hist = hist; window.__gmsHist = JSON.parse(t); window.dispatchEvent(new CustomEvent('gms-hist')); }); }).catch(function(){}); }, 2500);
   setInterval(check, 10*60000);
   document.addEventListener('visibilitychange', function(){ if(!document.hidden && Date.now() - (window.__gmsBgLast||0) > 5*60000){ window.__gmsBgLast = Date.now(); check(); } });
 };
