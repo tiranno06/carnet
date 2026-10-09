@@ -1,0 +1,31 @@
+name: veilleur
+on:
+  schedule:
+    - cron: '41 * * * *'   # chaque heure, entre deux passages du robot
+  workflow_dispatch:
+permissions:
+  actions: write
+  contents: read
+concurrency:
+  group: veilleur
+  cancel-in-progress: true
+jobs:
+  veilleur:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Abonnements chiffrés (branche coffre)
+        run: |
+          git fetch -q --depth=1 origin coffre || exit 0
+          git show FETCH_HEAD:abonnements.enc > abonnements.enc 2>/dev/null || rm -f abonnements.enc
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund --silent
+      - name: Vérification du robot
+        run: node veilleur.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MOT_DE_PASSE: ${{ secrets.MOT_DE_PASSE }}
