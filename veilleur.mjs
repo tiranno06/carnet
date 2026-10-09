@@ -5,7 +5,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { cle, dechiffre } from './chiffre.mjs';
 import { vapidKeys, envoyer } from './alertes.mjs';
 const { GH_TOKEN, REPO, MOT_DE_PASSE } = process.env;
-const say = m => console.log(m);
+const say = m => console.log('::notice title=Veilleur::' + m);
 const api = async (path, opts = {}) => { const r = await fetch(`https://api.github.com/repos/${REPO}/${path}`, { ...opts, headers: { Authorization: 'Bearer ' + GH_TOKEN, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' } }); return r; };
 const json = async path => { const r = await api(path); if(!r.ok) throw new Error(path + ' → ' + r.status); return r.json(); };
 const now = Date.now(), H = 3600000;
