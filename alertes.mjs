@@ -49,7 +49,7 @@ export function enregistrer(H, st){
 
 export function alertes(H, st, subs){
   const A = H.alerts = H.alerts || {}; const now = parisNow();
-  const msgs = { zones: [], prevision: [], hebdo: [], pannes: [], agenda: [], matin: [], xc: [] };
+  const msgs = { zones: [], prevision: [], hebdo: [], pannes: [], agenda: [], matin: [], xc: [], susp: [], wl: [], liens: [] };
   // 1. zones des températures
   A.z = A.z || {};
   Object.entries(st.t || {}).forEach(([k, t]) => {
@@ -87,6 +87,20 @@ export function alertes(H, st, subs){
   }
   // 3 quater (09/10, n°10). bulletin du matin : notification une fois par jour (si tu l'as activée)
   if(H.matin && H.matin.date === now.date && A.matin !== now.date){ A.matin = now.date; msgs.matin.push(H.matin.lines.join('\n')); }
+  // 3 quinquies (09/10, n°5). valeurs suspectes : variation du jour > 3 fois la plus grosse variation relevée (≥ 20 jours)
+  A.susp = A.susp || {};
+  try{ const days = Object.keys(H.days || {}).filter(d => d < now.date && H.days[d] && H.days[d].raw).sort();
+    Object.entries(st.raw || {}).forEach(([k, R]) => Object.entries(R || {}).forEach(([n, x]) => {
+      const s = days.map(d => H.days[d].raw[k] ? H.days[d].raw[k][n] : null).filter(v => v != null && isFinite(v)); if(s.length < 20) return;
+      let mx = 0; for(let i = 1; i < s.length; i++) mx = Math.max(mx, Math.abs(s[i] - s[i-1])); const last = s[s.length-1], j = Math.abs(x - last);
+      if(mx > 0 && j > 3*mx && j > 0.02*Math.abs(last)){ const id = k + '|' + n; if(!A.susp[id] || A.susp[id] < new Date(Date.now() - 7*86400000).toISOString().slice(0, 10)){ A.susp[id] = now.date; msgs.susp.push(n); } }
+    })); }catch(e){}
+  // 3 sexies (09/10, n°10). liste de suivi : alerte quand un élément PASSE sous ton seuil (pas à chaque passage)
+  A.wl = A.wl || {}; const vusWl = new Set();
+  (st.wl || []).forEach(x => { vusWl.add(x.s); const on = (x.al || []).length > 0; if(on && !A.wl[x.s]) msgs.wl.push(`${x.n} : ${x.al.join(' ; ')}`); A.wl[x.s] = on; });
+  Object.keys(A.wl).forEach(s => { if(!vusWl.has(s)) delete A.wl[s]; });
+  // 3 septies (09/10, n°12). nouveaux liens de vérification cassés
+  if((st.liensNouv || []).length) msgs.liens.push(st.liensNouv.join(', '));
   // 4. résumé du dimanche matin (une fois par semaine)
   if(now.day === 0 && now.hour >= 9 && A.weekly !== now.date){
     A.weekly = now.date;
@@ -110,7 +124,7 @@ export function alertes(H, st, subs){
   const out = [];
   for(const s of subs || []){
     if(!s || !s.endpoint || !s.keys) continue;
-    const pr = Object.assign({ zones:true, prevision:true, hebdo:true, pannes:true, agenda:true, matin:false }, s.prefs || {});
+    const pr = Object.assign({ zones:true, prevision:true, hebdo:true, pannes:true, agenda:true, matin:false, suivi:true }, s.prefs || {});
     if(!A.seen.includes(s.id)){ out.push({ s, title:'✅ Carnet : notifications activées', body:`Ce ${s.label || 'appareil'} recevra les alertes importantes, même quand le Carnet est fermé.`, url:'./', tag:'carnet-bienvenue' }); }
     const parts = [];
     if(pr.zones && msgs.zones.length) parts.push(...msgs.zones);
@@ -120,6 +134,9 @@ export function alertes(H, st, subs){
     if(pr.hebdo && msgs.bulletin.length) out.push({ s, title:'📝 Carnet : bulletin de notes de la Prévision', body: msgs.bulletin[0], url:'./?vue=prevision', tag:'carnet-bulletin' });
     if(pr.pannes && msgs.pannes.length) out.push({ s, title:'⚠️ Carnet : source de données en panne', body: msgs.pannes.join(', ') + ' — en échec depuis 3 passages du robot.', url:'./', tag:'carnet-panne' });
     if(pr.pannes && msgs.xc.length) out.push({ s, title:'🔎 Carnet : deux sources ne sont pas d\'accord', body: msgs.xc.join(', ') + ' — écart anormal depuis 3 passages du robot. Détail : Réglages › Diagnostic › contrôle croisé.', url:'./', tag:'carnet-xc' });
+    if(pr.pannes && msgs.susp.length) out.push({ s, title:'⚠️ Carnet : valeur à vérifier', body: msgs.susp.slice(0, 5).join(', ') + ' — variation du jour bien plus forte que tout ce qui a été relevé. Erreur de source ou vrai événement ?', url:'./', tag:'carnet-susp' });
+    if(pr.suivi && msgs.wl.length) out.push({ s, title: msgs.wl.length === 1 ? '👀 Carnet : ta liste de suivi' : `👀 Carnet : ${msgs.wl.length} alertes de ta liste de suivi`, body: msgs.wl.join('\n'), url:'./', tag:'carnet-suivi' });
+    if(pr.pannes && msgs.liens.length) out.push({ s, title:'🔗 Carnet : lien de vérification cassé', body: msgs.liens[0] + ' — détail dans Réglages › Avancé › Liens de vérification.', url:'./', tag:'carnet-liens' });
     if(pr.agenda && msgs.agenda.length) out.push({ s, title:'📅 Carnet : demain, annonce importante', body: msgs.agenda[0], url:'./', tag:'carnet-agenda' });
     if(pr.matin && msgs.matin.length) out.push({ s, title:'☀️ Carnet : le bulletin du matin', body: msgs.matin[0], url:'./', tag:'carnet-matin' });
   }

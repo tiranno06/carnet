@@ -22,7 +22,7 @@ try{ html = await dechiffre(key, readFileSync('app.enc', 'utf8')); }catch(e){ sa
 let prev = null;
 if(existsSync('site/data.enc')){ try{ prev = JSON.parse(await dechiffre(key, readFileSync('site/data.enc', 'utf8'))); }catch(e){ say('état précédent illisible : on repart de zéro'); } }
 // tes données personnelles (stock de métaux…) : lues seulement pour calculer la valeur du jour, jamais recopiées en clair
-const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros)/;
+const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist)/;
 let perso = {};
 if(existsSync('coffre.enc')){ try{ perso = JSON.parse(await dechiffre(key, readFileSync('coffre.enc', 'utf8'))).data || {}; }catch(e){ say('coffre illisible'); } }
 let subs = [];
@@ -110,6 +110,9 @@ try{
   say(`lectures directes sans intermédiaire : ${direct.ok} (repli sur l'intermédiaire : ${direct.repli})`);
   // 09/10 : données du Guide (indice Monde) et contrôles de cohérence, utilisés par le relevé ci-dessous
   await page.evaluate(async () => { try{ if(!window.__coursLastD && typeof coursLiveData==='function') window.__coursLastD = await coursLiveData(); }catch(e){} try{ if(!window.__xcheckAt && typeof runCrossChecks==='function') await runCrossChecks(); }catch(e){} }).catch(() => {});
+  // 09/10 (n°10) : ta liste de suivi — mesures du jour et alertes (le contenu reste chiffré, seul un nombre va au journal)
+  let wl = [];
+  try{ wl = await page.evaluate(async () => { try{ return typeof wlComputeAll==='function' ? await wlComputeAll() : []; }catch(e){ return []; } }); }catch(e){}
   // relevé du jour : températures, probabilités, sources en panne, valeur de ton stock
   const jour = await page.evaluate(() => {
     const o = { t:{}, pv:{}, fails:[], mv:null };
@@ -138,6 +141,23 @@ try{
     const pvDays = {}; Object.entries(H.days || {}).forEach(([d, x]) => { if(x && x.pv) pvDays[d] = { pv: x.pv }; });
     jour.bul = await page.evaluate(days => { try{ const B = pvBulletin(null, { days }); const o = {}; Object.entries(B).forEach(([id, x]) => { o[id] = { l: x.label, b: x.test.bear ? x.test.bear.note : null, u: x.test.bull ? x.test.bull.note : null, lb: x.live.bear && x.live.bear.note!=null ? x.live.bear.note : null, lu: x.live.bull && x.live.bull.note!=null ? x.live.bull.note : null }; }); return o; }catch(e){ return null; } }, pvDays);
   }catch(e){}
+  jour.wl = wl;
+  // 09/10 (n°12) : liens « Vérifier sur… » contrôlés une fois par semaine (4 à la fois, sans rafale)
+  try{
+    if(!H.liens || Date.now() - H.liens.at > 6.5*86400000){
+      const L = await page.evaluate(() => { const o = {}; document.querySelectorAll('a[href^="http"]').forEach(a => { if(!/v[ée]rifier/i.test(a.textContent)) return; const c = a.closest('.card, .gauge-card, [class*=card]'); const k = c && c.querySelector('.k, h3, .title-row'); const n = ((k && k.textContent) || a.textContent).replace(/\s+/g,' ').trim().slice(0, 60); if(!o[a.href]) o[a.href] = n; }); return Object.entries(o).map(([u, n]) => ({ u, n })); });
+      const pb = []; let i = 0;
+      const one = async ({ u, n }) => { try{ const r = await fetch(u, { headers: { 'user-agent': UA, 'accept': 'text/html,*/*', 'accept-language': 'fr-FR,fr;q=0.9' }, redirect: 'follow', signal: AbortSignal.timeout(12000) });
+          if(r.status >= 400) pb.push({ n, u, c: [401, 403, 429, 999].includes(r.status) || (r.status === 503 && /cloudflare/i.test(r.headers.get('server')||'')) ? 'bloque' : 'casse', h: 'HTTP ' + r.status });
+          try{ await r.body?.cancel(); }catch(e){}
+        }catch(e){ const m = String(e && (e.cause && e.cause.code || e.name) || e); pb.push({ n, u, c: /ENOTFOUND|EAI_AGAIN|CERT|ECONNREFUSED/.test(m) ? 'casse' : 'injoignable', h: m.slice(0, 30) }); } };
+      await Promise.all([0, 1, 2, 3].map(async () => { while(i < L.length){ const x = L[i++]; await one(x); await new Promise(r => setTimeout(r, 400)); } }));
+      const avant = new Set(((H.liens && H.liens.pb) || []).filter(x => x.c === 'casse').map(x => x.u));
+      jour.liensNouv = pb.filter(x => x.c === 'casse' && !avant.has(x.u)).map(x => x.n);
+      H.liens = { at: Date.now(), n: L.length, pb };
+      say(`liens de vérification : ${L.length} contrôlés, ${pb.filter(x => x.c==='casse').length} cassés, ${pb.filter(x => x.c!=='casse').length} refusent les robots ou ne répondent pas`);
+    }
+  }catch(e){ say('contrôle des liens impossible'); }
   enregistrer(H, jour);
   const al = alertes(H, jour, subs);
   say(`relevé du jour enregistré (${Object.keys(H.days).length} jours) ; alertes : ${Object.entries(al.counts).map(([k, n]) => k + ' ' + n).join(', ')}`);
