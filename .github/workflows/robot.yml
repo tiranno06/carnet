@@ -44,6 +44,19 @@ jobs:
           git add -A
           git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -qm maj
           git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site
+      - name: Sauvegarde hebdomadaire chiffrée (branche sauvegardes, 8 dernières semaines)
+        if: hashFiles('out/historique.enc') != ''
+        run: |
+          W=$(date -u +%G-S%V)
+          mkdir -p sv && cd sv && git init -q -b sauvegardes
+          if git fetch -q --depth=1 "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" sauvegardes 2>/dev/null; then git checkout -q FETCH_HEAD -- . ; fi
+          if [ -f "$W.enc" ]; then echo "sauvegarde de la semaine déjà faite"; exit 0; fi
+          node -e 'const fs=require("fs");const r=f=>fs.existsSync(f)?fs.readFileSync(f,"utf8"):null;fs.writeFileSync(process.argv[1],JSON.stringify({v:1,at:Date.now(),coffre:r("../coffre.enc"),hist:r("../out/historique.enc")}))' "$W.enc"
+          ls *.enc | sort | head -n -8 | xargs -r rm -f
+          git add -A
+          git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -qm sauvegarde
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" sauvegardes
+          echo "sauvegarde de la semaine enregistrée"
       - name: Publier le site (tâche séparée)
         if: hashFiles('out/data.enc') != ''
         run: |

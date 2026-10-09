@@ -108,6 +108,8 @@ try{
   await page.waitForFunction(() => !window.__pv || window.__pv.done, null, { timeout: 240000, polling: 2000 }).catch(() => say('prévision : pas finie à temps'));
   say('prévision calculée');
   say(`lectures directes sans intermédiaire : ${direct.ok} (repli sur l'intermédiaire : ${direct.repli})`);
+  // 09/10 : données du Guide (indice Monde) et contrôles de cohérence, utilisés par le relevé ci-dessous
+  await page.evaluate(async () => { try{ if(!window.__coursLastD && typeof coursLiveData==='function') window.__coursLastD = await coursLiveData(); }catch(e){} try{ if(!window.__xcheckAt && typeof runCrossChecks==='function') await runCrossChecks(); }catch(e){} }).catch(() => {});
   // relevé du jour : températures, probabilités, sources en panne, valeur de ton stock
   const jour = await page.evaluate(() => {
     const o = { t:{}, pv:{}, fails:[], mv:null };
@@ -116,6 +118,16 @@ try{
     try{ const R = window.__pv && window.__pv.res; if(R) Object.values(R).forEach(x => { if(!x || x.missing || !x.bear) return; const rel = s => s && s.auc!=null && s.auc >= 0.65;
       o.pv[x.id] = { label: x.label, b: Math.round(x.bear.now.p*100), u: Math.round(x.bull.now.p*100), sb: x.bear.now.sc, su: x.bull.now.sc, baseB: Math.round(x.bear.st.base*100), baseU: Math.round(x.bull.st.base*100), relB: rel(x.bear.st), relU: rel(x.bull.st), phase: x.phase ? x.phase.k : null, dd: x.phase ? Math.round(x.phase.dd) : null }; }); }catch(e){}
     try{ const dots = [...document.querySelectorAll('.fresh-dot.fail')]; o.fails = [...new Set(dots.map(el => { const c = el.closest('.card, .gauge-card, [class*=card]'); const k = c && c.querySelector('.k, h3, .title-row'); return ((k && k.textContent) || el.id).replace(/\s+/g,' ').trim().slice(0, 50); }))]; }catch(e){}
+    // 09/10 (n°6) : valeur brute de chaque indicateur (historique « maison », pour pouvoir un jour tester ceux qui n'ont pas d'historique gratuit)
+    try{ o.raw = {}; for(const k of ['traditional','crypto','france']){ const R = {}; svModel(k, true).rows.filter(r => !r.info).forEach(r => { const m = String(r.value||'').replace(/\s/g,'').replace(',', '.').match(/[-+−]?\d+(\.\d+)?/); if(m){ const v = parseFloat(m[0].replace('−','-')); if(isFinite(v)) R[r.name] = v; } }); o.raw[k] = R; } }catch(e){}
+    // 09/10 (n°8) : de quoi suivre ta règle de DCA en vrai (multiplicateur du jour + cours des ETF)
+    try{ const D = window.__coursLastD || {}; const lastV = a => a && a.length ? a[a.length-1].value : null; o.dca = { m: typeof dcaMultiplier==='function' ? dcaMultiplier() : null, rule: typeof dcaRule==='function' ? dcaRule() : null, world: lastV(D.world), spx: lastV(D.spx), btc: window.__marketData?.btc?.price ?? null, gold: window.__marketData?.gold?.price ?? null }; }catch(e){}
+    // 09/10 (n°3) : annonces importantes de demain
+    try{ const dm = new Date(); dm.setHours(0,0,0,0); dm.setDate(dm.getDate()+1); o.eco = ecoEvents(2).filter(e => +e.date === +dm).map(e => { const K = ECO_KINDS[e.kind] || {}; return { k: e.kind, n: K.name, i: K.ico, imp: K.imp, h: ecoParisTime(e.date, K.et || [8,30]), w: K.why }; }); }catch(e){}
+    // 09/10 (n°13) : contrôles de cohérence en désaccord
+    try{ o.xc = (window.__xcheck || []).filter(x => x && x.ok === false).map(x => x.name.replace(/\s*\(\d{2}\/\d{2}\/\d{4}\)/, '')); }catch(e){}
+    // 09/10 (n°10) : bulletin du matin (5 lignes)
+    try{ o.matin = typeof matinLines==='function' ? matinLines() : null; }catch(e){}
     try{ if(typeof renderMyMetals==='function') renderMyMetals(); const h = JSON.parse(localStorage.getItem('mt_metals_value_history')||'[]'); const last = h[h.length-1]; if(last && last.date === new Date().toISOString().slice(0,10) && last.value > 0) o.mv = { value: Math.round(last.value*100)/100, cost: last.cost!=null ? Math.round(last.cost*100)/100 : null }; }catch(e){}
     return o;
   });

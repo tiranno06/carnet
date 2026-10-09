@@ -29,7 +29,11 @@ export function enregistrer(H, st){
   H.v = 1; H.days = H.days || {}; H.alerts = H.alerts || {};
   const { date } = parisNow();
   const pv = {}; Object.entries(st.pv || {}).forEach(([id, x]) => { pv[id] = { b: x.b, u: x.u, sb: x.sb, su: x.su }; });
-  H.days[date] = Object.assign(H.days[date] || {}, { t: st.t, pv }, st.mv ? { mv: st.mv } : {});
+  H.days[date] = Object.assign(H.days[date] || {}, { t: st.t, pv }, st.mv ? { mv: st.mv } : {}, st.raw ? { raw: st.raw } : {});
+  // 09/10 (n°8) : suivi réel de la règle de DCA — 1er relevé du mois gardé tel quel, dernier relevé mis à jour
+  if(st.dca && st.dca.world){ const mo = date.slice(0, 7); H.dca = H.dca || {}; if(!H.dca[mo]) H.dca[mo] = { d: date, m: st.dca.m, rule: st.dca.rule, world: st.dca.world }; H.dcaLast = { d: date, world: st.dca.world }; }
+  // 09/10 (n°10) : bulletin du matin, préparé au premier passage après 6 h (heure de Paris)
+  if(st.matin && st.matin.length && parisNow().hour >= 6 && (!H.matin || H.matin.date !== date)) H.matin = { date, at: Date.now(), lines: st.matin };
   if(st.bul) H.bul = { date, notes: st.bul }; // dernier bulletin de notes (n°10)
   // scores de chaque indicateur, jour par jour (les 60 derniers jours de l'appareil du robot, puis l'historique s'allonge)
   Object.entries(st.sv || {}).forEach(([d, v]) => { if(/^\d{4}-\d{2}-\d{2}$/.test(d) && v) (H.days[d] = H.days[d] || {}).sv = v; });
@@ -38,7 +42,7 @@ export function enregistrer(H, st){
 
 export function alertes(H, st, subs){
   const A = H.alerts = H.alerts || {}; const now = parisNow();
-  const msgs = { zones: [], prevision: [], hebdo: [], pannes: [] };
+  const msgs = { zones: [], prevision: [], hebdo: [], pannes: [], agenda: [], matin: [], xc: [] };
   // 1. zones des températures
   A.z = A.z || {};
   Object.entries(st.t || {}).forEach(([k, t]) => {
@@ -65,6 +69,17 @@ export function alertes(H, st, subs){
   A.f = A.f || {}; const cur = new Set(st.fails || []);
   Object.keys(A.f).forEach(n => { if(!cur.has(n)) delete A.f[n]; });
   cur.forEach(n => { A.f[n] = (A.f[n] || 0) + 1; if(A.f[n] === 3) msgs.pannes.push(n); });
+  // 3 bis (09/10, n°13). contrôles de cohérence : deux sources en désaccord 3 passages de suite
+  A.xc = A.xc || {}; const curX = new Set(st.xc || []);
+  Object.keys(A.xc).forEach(n => { if(!curX.has(n)) delete A.xc[n]; });
+  curX.forEach(n => { A.xc[n] = (A.xc[n] || 0) + 1; if(A.xc[n] === 3) msgs.xc.push(n); });
+  // 3 ter (09/10, n°3). annonces importantes de demain : un rappel le soir (premier passage après 18 h)
+  if(now.hour >= 18 && A.agenda !== now.date && (st.eco || []).some(e => e.imp >= 2)){
+    A.agenda = now.date;
+    msgs.agenda.push((st.eco || []).filter(e => e.imp >= 2).map(e => `${e.i || '📅'} ${e.h ? e.h + ' : ' : ''}${e.n}. ${e.w || ''}`).join('\n'));
+  }
+  // 3 quater (09/10, n°10). bulletin du matin : notification une fois par jour (si tu l'as activée)
+  if(H.matin && H.matin.date === now.date && A.matin !== now.date){ A.matin = now.date; msgs.matin.push(H.matin.lines.join('\n')); }
   // 4. résumé du dimanche matin (une fois par semaine)
   if(now.day === 0 && now.hour >= 9 && A.weekly !== now.date){
     A.weekly = now.date;
@@ -88,7 +103,7 @@ export function alertes(H, st, subs){
   const out = [];
   for(const s of subs || []){
     if(!s || !s.endpoint || !s.keys) continue;
-    const pr = Object.assign({ zones:true, prevision:true, hebdo:true, pannes:true }, s.prefs || {});
+    const pr = Object.assign({ zones:true, prevision:true, hebdo:true, pannes:true, agenda:true, matin:false }, s.prefs || {});
     if(!A.seen.includes(s.id)){ out.push({ s, title:'✅ Carnet : notifications activées', body:`Ce ${s.label || 'appareil'} recevra les alertes importantes, même quand le Carnet est fermé.`, url:'./', tag:'carnet-bienvenue' }); }
     const parts = [];
     if(pr.zones && msgs.zones.length) parts.push(...msgs.zones);
@@ -97,6 +112,9 @@ export function alertes(H, st, subs){
     if(pr.hebdo && msgs.hebdo.length) out.push({ s, title:'📅 Carnet : résumé de la semaine', body: msgs.hebdo[0], url:'./', tag:'carnet-hebdo' });
     if(pr.hebdo && msgs.bulletin.length) out.push({ s, title:'📝 Carnet : bulletin de notes de la Prévision', body: msgs.bulletin[0], url:'./?vue=prevision', tag:'carnet-bulletin' });
     if(pr.pannes && msgs.pannes.length) out.push({ s, title:'⚠️ Carnet : source de données en panne', body: msgs.pannes.join(', ') + ' — en échec depuis 3 passages du robot.', url:'./', tag:'carnet-panne' });
+    if(pr.pannes && msgs.xc.length) out.push({ s, title:'🔎 Carnet : deux sources ne sont pas d\'accord', body: msgs.xc.join(', ') + ' — écart anormal depuis 3 passages du robot. Détail : Réglages › Diagnostic › contrôle croisé.', url:'./', tag:'carnet-xc' });
+    if(pr.agenda && msgs.agenda.length) out.push({ s, title:'📅 Carnet : demain, annonce importante', body: msgs.agenda[0], url:'./', tag:'carnet-agenda' });
+    if(pr.matin && msgs.matin.length) out.push({ s, title:'☀️ Carnet : le bulletin du matin', body: msgs.matin[0], url:'./', tag:'carnet-matin' });
   }
   A.seen = (subs || []).map(s => s && s.id).filter(Boolean);
   return { out, counts: Object.fromEntries(Object.entries(msgs).map(([k, v]) => [k, v.length])) };
