@@ -51,6 +51,12 @@ let dataTs = null, siteTs = null;
 try{ dataTs = Date.parse((await json('branches/site')).commit.commit.committer.date); }catch(e){ say('date des données illisible'); }
 try{ const r = (await json('actions/workflows/site.yml/runs?status=success&per_page=1')).workflow_runs[0]; if(r) siteTs = Date.parse(r.updated_at); }catch(e){}
 if(dataTs && siteTs && dataTs - siteTs > 0.75*H) relancer.add('site.yml');
+// 16/10 : robot simplement en retard (GitHub a sauté ses passages programmés) → on le lance
+try{
+  const der = (await json('actions/workflows/robot.yml/runs?per_page=1')).workflow_runs[0];
+  const depuis = der ? (now - Date.parse(der.created_at)) / H : 99;
+  if(depuis > 1.25){ say(`robot pas lancé depuis ${depuis.toFixed(1)} h`); relancer.add('robot.yml'); }
+}catch(e){ say('dernier passage du robot illisible'); }
 for(const wf of relancer){
   await pause(5000);
   let reste = 0; for(const st of ['queued', 'in_progress']){ try{ reste += (await json(`actions/workflows/${wf}/runs?status=${st}&per_page=5`)).workflow_runs.length; }catch(e){} }

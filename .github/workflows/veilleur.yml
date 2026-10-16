@@ -1,7 +1,7 @@
 name: veilleur
 on:
   schedule:
-    - cron: '41 * * * *'   # chaque heure, entre deux passages du robot
+    - cron: '2-59/20 * * * *'   # 16/10 : toutes les 20 min (GitHub en saute aussi : plus de chances de passer)
   workflow_dispatch:
 permissions:
   actions: write

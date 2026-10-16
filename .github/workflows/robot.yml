@@ -1,8 +1,10 @@
 name: robot
 on:
   schedule:
-    - cron: '23 * * * *'        # toutes les heures (GitHub en saute souvent : le veilleur surveille)
-    - cron: '53 13-20 * * 1-5'  # + toutes les 30 min pendant la séance de Wall Street (heure UTC)
+    # 16/10 : demandé toutes les 15 min. GitHub saute la plupart des passages programmés (4 à 7 par jour
+    # constatés avec « toutes les heures ») : en demander plus en laisse passer assez. En renfort : le veilleur
+    # relance le robot s'il n'est pas passé depuis 75 min, et un déclencheur extérieur (cron-job.org) peut le lancer.
+    - cron: '8-59/15 * * * *'
   workflow_dispatch:
 permissions:
   contents: write
