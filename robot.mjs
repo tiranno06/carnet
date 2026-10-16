@@ -148,6 +148,8 @@ try{
     try{ const D = window.__coursLastD || {}; const lastV = a => a && a.length ? a[a.length-1].value : null; o.dca = { m: typeof dcaMultiplier==='function' ? dcaMultiplier() : null, rule: typeof dcaRule==='function' ? dcaRule() : null, world: lastV(D.world), spx: lastV(D.spx), btc: window.__marketData?.btc?.price ?? null, gold: window.__marketData?.gold?.price ?? null }; }catch(e){}
     // 09/10 (n°3) : annonces importantes de demain
     try{ const dm = new Date(); dm.setHours(0,0,0,0); dm.setDate(dm.getDate()+1); o.eco = ecoEvents(2).filter(e => +e.date === +dm).map(e => { const K = ECO_KINDS[e.kind] || {}; return { k: e.kind, n: K.name, i: K.ico, imp: K.imp, h: ecoParisTime(e.date, K.et || [8,30]), w: K.why }; }); }catch(e){}
+    // 16/10 : résumé « Que faire ce mois-ci ? » (envoyé le 1er du mois)
+    try{ o.mois = typeof moisLines==='function' ? moisLines() : null; }catch(e){}
     // 16/10 : pages dont la présentation a changé (mises de côté, source de secours utilisée)
     try{ o.fmt = Object.entries(JSON.parse(localStorage.getItem('mt_format_ko')||'{}')).filter(([, e]) => e && e.n >= 3).map(([k]) => k.split('?')[0].slice(0, 70)); }catch(e){}
     // 09/10 (n°13) : contrôles de cohérence en désaccord

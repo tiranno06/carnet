@@ -120,6 +120,9 @@ export function alertes(H, st, subs){
     const pvl = Object.values(st.pv || {}).filter(x => x.relB).map(x => `${x.label} : baisse ${x.b} %, hausse ${x.u} %`);
     msgs.hebdo.push('Températures : ' + lines.join(' · ') + (pvl.length ? '\nPrévision 12 mois : ' + pvl.join(' · ') : ''));
   }
+  // 4 bis (16/10). « Que faire ce mois-ci ? » : le 1er du mois, à partir de 9 h
+  msgs.mois = [];
+  if(now.date.slice(8) === '01' && now.hour >= 9 && A.mois !== now.date.slice(0, 7) && (st.mois || []).length){ A.mois = now.date.slice(0, 7); msgs.mois.push(st.mois.join('\n')); }
   // 5. bulletin de notes de la Prévision : une fois par mois (au premier passage du mois, à partir de 9 h)
   msgs.bulletin = [];
   const mois = now.date.slice(0, 7);
@@ -144,6 +147,7 @@ export function alertes(H, st, subs){
     if(pr.prevision && msgs.prevision.length) parts.push(...msgs.prevision);
     if(parts.length) out.push({ s, title: parts.length === 1 ? 'Carnet : un changement' : `Carnet : ${parts.length} changements`, body: parts.join('\n'), url: msgs.prevision.length && pr.prevision ? './?vue=prevision' : './', tag:'carnet-alerte' });
     if(pr.hebdo && msgs.hebdo.length) out.push({ s, title:'📅 Carnet : résumé de la semaine', body: msgs.hebdo[0], url:'./', tag:'carnet-hebdo' });
+    if(pr.hebdo && msgs.mois.length) out.push({ s, title:'🗓️ Carnet : que faire ce mois-ci ?', body: msgs.mois[0], url:'./', tag:'carnet-mois' });
     if(pr.hebdo && msgs.bulletin.length) out.push({ s, title:'📝 Carnet : bulletin de notes de la Prévision', body: msgs.bulletin[0], url:'./?vue=prevision', tag:'carnet-bulletin' });
     if(pr.pannes && msgs.pannes.length) out.push({ s, title:'⚠️ Carnet : source de données en panne', body: msgs.pannes.join(', ') + ' — en échec depuis 3 passages du robot.', url:'./', tag:'carnet-panne' });
     if(pr.pannes && msgs.xc.length) out.push({ s, title:'🔎 Carnet : deux sources ne sont pas d\'accord', body: msgs.xc.join(', ') + ' — écart anormal depuis 3 passages du robot. Détail : Réglages › Diagnostic › contrôle croisé.', url:'./', tag:'carnet-xc' });
