@@ -102,4 +102,26 @@ try{
   }
 }catch(e){ say('signe de vie : vérification impossible'); }
 
+// ---- 4. (16/10) déclencheur extérieur cron-job.org : il lance le robot toutes les 20 min avec ton jeton GitHub.
+// Plus aucun lancement par ton jeton depuis 2 h → le jeton a sans doute expiré ou été refusé : on te prévient.
+try{
+  const runs = (await json('actions/workflows/robot.yml/runs?event=workflow_dispatch&per_page=30')).workflow_runs || [];
+  const der = runs.find(r => r.triggering_actor && !/\[bot\]$/.test(r.triggering_actor.login));
+  const ageH = der ? (now - Date.parse(der.created_at)) / H : 99;
+  let msg = null;
+  if(ageH > 2 && (!etat.cron || now - etat.cron >= 24*H)){
+    msg = { title: '⚠️ Carnet : le lancement automatique du robot est en panne', body: `Ton déclencheur (cron-job.org) n'a plus lancé le robot depuis ${ageH >= 99 ? 'longtemps' : Math.floor(ageH) + ' h'}. Le jeton GitHub a sans doute expiré : crée-en un nouveau et mets-le dans la tâche « robot carnet » de cron-job.org. En attendant, GitHub lance encore le robot de temps en temps.`, tag: 'carnet-cron' };
+    etat.cron = now; modif = true; say(`déclencheur extérieur muet depuis ${ageH.toFixed(1)} h`);
+  } else if(ageH <= 2 && etat.cron){
+    msg = { title: '✅ Carnet : le lancement automatique du robot remarche', body: 'Le déclencheur cron-job.org lance de nouveau le robot.', tag: 'carnet-cron' };
+    delete etat.cron; modif = true;
+  }
+  if(msg && MOT_DE_PASSE && existsSync('abonnements.enc')){
+    const key = await cle(MOT_DE_PASSE, JSON.parse(readFileSync('sel.json', 'utf8')));
+    const subs = JSON.parse(await dechiffre(key, readFileSync('abonnements.enc', 'utf8'))).subs || [];
+    const r = await envoyer(subs.filter(s => s && s.endpoint && s.keys && (!s.prefs || s.prefs.pannes !== false)).map(s => ({ s, ...msg, url: './' })), vapidKeys(MOT_DE_PASSE));
+    say(`notification déclencheur : ${r.ok} envoyée(s)`);
+  }
+}catch(e){ say('contrôle du déclencheur extérieur impossible'); }
+
 if(modif) await sauver();
