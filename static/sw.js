@@ -1,6 +1,6 @@
 // Service worker : installation comme application, ouverture hors connexion, et notifications du robot.
 // Il ne touche qu'aux fichiers du site lui-même ; les données (chiffrées) ont leur propre copie locale.
-const C = 'carnet-v2';
+const C = 'carnet-v3';
 const SHELL = ['./', './index.html', './sel.json', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(C).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== C).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -21,6 +21,8 @@ self.addEventListener('fetch', e => {
 // notifications envoyées par le robot (contenu chiffré de bout en bout, déchiffré ici par le navigateur)
 self.addEventListener('push', e => {
   let d = {}; try{ d = e.data ? e.data.json() : {}; }catch(_){ d = { body: e.data && e.data.text() }; }
+  // 16/10 : pastille sur l'icône envoyée par le robot (nombre de points à regarder dans ta liste de suivi)
+  try{ if(typeof d.badge === 'number' && self.navigator && self.navigator.setAppBadge){ d.badge > 0 ? self.navigator.setAppBadge(d.badge) : self.navigator.clearAppBadge(); } }catch(_){}
   e.waitUntil(self.registration.showNotification(d.title || 'Carnet', { body: d.body || '', icon: 'icon-192.png', badge: 'icon-192.png', tag: d.tag || 'carnet', renotify: true, data: { url: d.url || './' } }));
 });
 self.addEventListener('notificationclick', e => {

@@ -154,6 +154,8 @@ export function alertes(H, st, subs){
     if(pr.agenda && msgs.agenda.length) out.push({ s, title:'📅 Carnet : demain, annonce importante', body: msgs.agenda[0], url:'./', tag:'carnet-agenda' });
     if(pr.matin && msgs.matin.length) out.push({ s, title:'☀️ Carnet : le bulletin du matin', body: msgs.matin[0], url:'./', tag:'carnet-matin' });
   }
+  // 16/10 : pastille de l'icône = lignes de la liste de suivi dont le seuil est atteint
+  const badge = (st.wl || []).filter(x => (x.al || []).length || x.v === 'bon').length; out.forEach(o => { o.badge = badge; });
   A.seen = (subs || []).map(s => s && s.id).filter(Boolean);
   return { out, counts: Object.fromEntries(Object.entries(msgs).map(([k, v]) => [k, v.length])) };
 }
@@ -164,7 +166,7 @@ export async function envoyer(liste, vapid){
   const det = k => ({ subject: 'https://tiranno06.github.io/carnet/', publicKey: k.publicKey, privateKey: k.privateKey });
   let ok = 0, ko = 0; const morts = [];
   for(const n of liste){
-    const sub = { endpoint: n.s.endpoint, keys: n.s.keys }, msg = JSON.stringify({ title: n.title, body: n.body, url: n.url, tag: n.tag });
+    const sub = { endpoint: n.s.endpoint, keys: n.s.keys }, msg = JSON.stringify({ title: n.title, body: n.body, url: n.url, tag: n.tag, ...(typeof n.badge === 'number' ? { badge: n.badge } : {}) });
     const go = k => webpush.sendNotification(sub, msg, { TTL: 12*3600, urgency: 'normal', vapidDetails: det(k) });
     try{ await go(vapid); ok++; }
     catch(e){
