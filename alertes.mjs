@@ -104,6 +104,11 @@ export function alertes(H, st, subs){
   A.wl = A.wl || {}; const vusWl = new Set();
   (st.wl || []).forEach(x => { vusWl.add(x.s); const on = (x.al || []).length > 0; if(on && !A.wl[x.s]) msgs.wl.push(`${x.n} : ${x.al.join(' ; ')}`); A.wl[x.s] = on; });
   Object.keys(A.wl).forEach(s => { if(!vusWl.has(s)) delete A.wl[s]; });
+  // 3 octies (16/10). sites dont la présentation a changé : prévenu une fois par page (et quand elle revient)
+  A.fmt = A.fmt || {}; msgs.format = [];
+  const fNow = new Set(st.fmt || []);
+  fNow.forEach(k => { if(!A.fmt[k]){ A.fmt[k] = now.date; msgs.format.push(k); } });
+  Object.keys(A.fmt).forEach(k => { if(!fNow.has(k)) delete A.fmt[k]; });
   // 3 septies (09/10, n°12). nouveaux liens de vérification cassés
   if((st.liensNouv || []).length) msgs.liens.push(st.liensNouv.join(', '));
   // 4. résumé du dimanche matin (une fois par semaine)
@@ -144,6 +149,7 @@ export function alertes(H, st, subs){
     if(pr.pannes && msgs.xc.length) out.push({ s, title:'🔎 Carnet : deux sources ne sont pas d\'accord', body: msgs.xc.join(', ') + ' — écart anormal depuis 3 passages du robot. Détail : Réglages › Diagnostic › contrôle croisé.', url:'./', tag:'carnet-xc' });
     if(pr.pannes && msgs.susp.length) out.push({ s, title:'⚠️ Carnet : valeur à vérifier', body: msgs.susp.slice(0, 5).join(', ') + ' — variation du jour bien plus forte que tout ce qui a été relevé. Erreur de source ou vrai événement ?', url:'./', tag:'carnet-susp' });
     if(pr.suivi && msgs.wl.length) out.push({ s, title: msgs.wl.length === 1 ? '👀 Carnet : ta liste de suivi' : `👀 Carnet : ${msgs.wl.length} alertes de ta liste de suivi`, body: msgs.wl.join('\n'), url:'./', tag:'carnet-suivi' });
+    if(pr.pannes && msgs.format.length) out.push({ s, title:'🧩 Carnet : un site a changé sa présentation', body: msgs.format.join(', ') + ' — le Carnet ne reconnaît plus la page : il utilise la source de secours (ou la dernière valeur connue) et réessaie toutes les 6 h.', url:'./', tag:'carnet-format' });
     if(pr.pannes && msgs.liens.length) out.push({ s, title:'🔗 Carnet : lien de vérification cassé', body: msgs.liens[0] + ' — détail dans Réglages › Avancé › Liens de vérification.', url:'./', tag:'carnet-liens' });
     if(pr.agenda && msgs.agenda.length) out.push({ s, title:'📅 Carnet : demain, annonce importante', body: msgs.agenda[0], url:'./', tag:'carnet-agenda' });
     if(pr.matin && msgs.matin.length) out.push({ s, title:'☀️ Carnet : le bulletin du matin', body: msgs.matin[0], url:'./', tag:'carnet-matin' });

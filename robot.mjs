@@ -14,7 +14,7 @@ if(!existsSync('app.enc')){ say("aucune application publiée pour l'instant : ri
 if(!MDP){ say('secret MOT_DE_PASSE pas encore configuré : rien à faire'); process.exit(0); }
 
 // mêmes familles de données que la page reprend (jamais de clé, jamais de donnée personnelle)
-const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health)/;
+const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko)/;
 // 16/10 : les compteurs de quotas des services gratuits sont gardés d'un passage à l'autre (le robot passe bien plus souvent)
 
 const key = await cle(MDP, JSON.parse(readFileSync('sel.json', 'utf8')));
@@ -148,6 +148,8 @@ try{
     try{ const D = window.__coursLastD || {}; const lastV = a => a && a.length ? a[a.length-1].value : null; o.dca = { m: typeof dcaMultiplier==='function' ? dcaMultiplier() : null, rule: typeof dcaRule==='function' ? dcaRule() : null, world: lastV(D.world), spx: lastV(D.spx), btc: window.__marketData?.btc?.price ?? null, gold: window.__marketData?.gold?.price ?? null }; }catch(e){}
     // 09/10 (n°3) : annonces importantes de demain
     try{ const dm = new Date(); dm.setHours(0,0,0,0); dm.setDate(dm.getDate()+1); o.eco = ecoEvents(2).filter(e => +e.date === +dm).map(e => { const K = ECO_KINDS[e.kind] || {}; return { k: e.kind, n: K.name, i: K.ico, imp: K.imp, h: ecoParisTime(e.date, K.et || [8,30]), w: K.why }; }); }catch(e){}
+    // 16/10 : pages dont la présentation a changé (mises de côté, source de secours utilisée)
+    try{ o.fmt = Object.entries(JSON.parse(localStorage.getItem('mt_format_ko')||'{}')).filter(([, e]) => e && e.n >= 3).map(([k]) => k.split('?')[0].slice(0, 70)); }catch(e){}
     // 09/10 (n°13) : contrôles de cohérence en désaccord
     try{ o.xc = (window.__xcheck || []).filter(x => x && x.ok === false).map(x => x.name.replace(/\s*\(\d{2}\/\d{2}\/\d{4}\)/, '')); }catch(e){}
     // 09/10 (n°10) : bulletin du matin (5 lignes)
