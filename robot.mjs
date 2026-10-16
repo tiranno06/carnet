@@ -23,7 +23,7 @@ try{ html = await dechiffre(key, readFileSync('app.enc', 'utf8')); }catch(e){ sa
 let prev = null;
 if(existsSync('site/data.enc')){ try{ prev = JSON.parse(await dechiffre(key, readFileSync('site/data.enc', 'utf8'))); }catch(e){ say('état précédent illisible : on repart de zéro'); } }
 // tes données personnelles (stock de métaux…) : lues seulement pour calculer la valeur du jour, jamais recopiées en clair
-const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule)/; // 16/10 : + ta règle pour les actions
+const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule|temp_exclus|temp_util)/; // 16/10 : + ta règle pour les actions, tes choix d'indicateurs comptés dans les températures
 let perso = {};
 if(existsSync('coffre.enc')){ try{ perso = JSON.parse(await dechiffre(key, readFileSync('coffre.enc', 'utf8'))).data || {}; }catch(e){ say('coffre illisible'); } }
 let subs = [];
