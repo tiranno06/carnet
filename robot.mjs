@@ -198,6 +198,9 @@ try{
     const bul = (jour && jour.bul) ? Object.values(jour.bul).map(x => `${x.l} ${x.b}/${x.u}`).join(' · ') : 'absent';
     console.log('::notice title=Direct::' + esc(`lectures directes sans intermédiaire : ${direct.ok}, repli : ${direct.repli}\nBulletin : ${bul}`));
   }
+  // 16/10 : séries anormalement anciennes → recherche automatique d'une remplaçante (au plus 1 fois/semaine par série ;
+  // le résultat, gardé dans mt_fred_repl, est repris par la page) — ici les sites répondent sans passerelle
+  try{ const n = await page.evaluate(async () => { let n = 0; try{ getStaleDataList(); for(const p of Object.values(window.__fredReplBusy || {})){ try{ if(await Promise.race([p, new Promise(r => setTimeout(r, 60000))])) n++; }catch(e){} } }catch(e){} return n; }); if(n) say(`${n} série(s) retirée(s) remplacée(s) automatiquement`); }catch(e){}
   // 3) on récupère l'état (filtré) et on le chiffre
   const st = await page.evaluate(async reSrc => {
     const re = new RegExp(reSrc), ls = {};
