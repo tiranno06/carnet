@@ -23,7 +23,7 @@ try{ html = await dechiffre(key, readFileSync('app.enc', 'utf8')); }catch(e){ sa
 let prev = null;
 if(existsSync('site/data.enc')){ try{ prev = JSON.parse(await dechiffre(key, readFileSync('site/data.enc', 'utf8'))); }catch(e){ say('état précédent illisible : on repart de zéro'); } }
 // tes données personnelles (stock de métaux…) : lues seulement pour calculer la valeur du jour, jamais recopiées en clair
-const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist)/;
+const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule)/; // 16/10 : + ta règle pour les actions
 let perso = {};
 if(existsSync('coffre.enc')){ try{ perso = JSON.parse(await dechiffre(key, readFileSync('coffre.enc', 'utf8'))).data || {}; }catch(e){ say('coffre illisible'); } }
 let subs = [];
@@ -108,6 +108,18 @@ try{
   await page.evaluate(() => { try{ if(typeof pvCompute==='function') pvCompute(false); }catch(e){} });
   await page.waitForFunction(() => !window.__pv || window.__pv.done, null, { timeout: 240000, polling: 2000 }).catch(() => say('prévision : pas finie à temps'));
   say('prévision calculée');
+  // 16/10 : tests sur le passé recalculés ici une fois par semaine (le plus ancien d'abord, un seul par passage,
+  // 3 min au plus) : les appareils les reçoivent tout prêts au lieu de les refaire eux-mêmes
+  try{
+    const bt = await page.evaluate(async () => {
+      const L = [['backtest-trad-v4', 'runTemperatureBacktest'], ['backtest-crypto-v2', 'runCryptoBacktest'], ['backtest-gold-v3', 'runGoldBacktest'], ['backtest-guide-v4', 'runGuideBacktest']];
+      const age = []; for(const [k, f] of L){ if(typeof window[f] !== 'function') continue; let c = null; try{ c = await idbGet('mt_dailycache_'+k); }catch(e){} const a = c ? Date.now() - c.ts : Infinity; if(a > 6*86400000) age.push([a, k, f]); }
+      if(!age.length) return null; age.sort((x, y) => y[0] - x[0]); const [, k, f] = age[0];
+      try{ await Promise.race([window[f](true), new Promise(r => setTimeout(r, 180000))]); }catch(e){ return k + ' : échec'; }
+      return k;
+    });
+    if(bt) say('test sur le passé recalculé : ' + bt);
+  }catch(e){}
   say(`lectures directes sans intermédiaire : ${direct.ok} (repli sur l'intermédiaire : ${direct.repli})`);
   // 09/10 : données du Guide (indice Monde) et contrôles de cohérence, utilisés par le relevé ci-dessous
   await page.evaluate(async () => { try{ if(!window.__coursLastD && typeof coursLiveData==='function') window.__coursLastD = await coursLiveData(); }catch(e){} try{ if(!window.__xcheckAt && typeof runCrossChecks==='function') await runCrossChecks(); }catch(e){} }).catch(() => {});
@@ -163,7 +175,8 @@ try{
   enregistrer(H, jour);
   const al = alertes(H, jour, subs);
   say(`relevé du jour enregistré (${Object.keys(H.days).length} jours) ; alertes : ${Object.entries(al.counts).map(([k, n]) => k + ' ' + n).join(', ')}`);
-  if(al.out.length && !process.env.DIAG){ const r = await envoyer(al.out, vapid); say(`notifications : ${r.ok} envoyée(s), ${r.ko} en échec`); }
+  // 16/10 : les notifications partent à la fin, une fois l'état enregistré (plus de doublons si le passage échoue avant)
+  const aEnvoyer = al.out.length && !process.env.DIAG ? al.out : [];
   await page.evaluate(() => { try{ snapshotHistory(); }catch(e){} });
   await idle(6000, 30000);
   await page.waitForTimeout(3000); // écritures différées (fraîcheur, historiques)
@@ -216,6 +229,10 @@ try{
   const snap = { v: 1, at: Date.now(), ls: st.ls, idb: st.idb, vapid: vapid.publicKey };
   mkdirSync('out', { recursive: true });
   writeFileSync('out/data.enc', await chiffre(key, JSON.stringify(snap)));
+  if(aEnvoyer.length){
+    const r = await envoyer(aEnvoyer, vapid); say(`notifications : ${r.ok} envoyée(s), ${r.ko} en échec`);
+    if(r.morts.length){ const M = (H.subMorts && !Array.isArray(H.subMorts)) ? H.subMorts : {}; r.morts.forEach(e => { M[e] = Date.now(); }); H.subMorts = Object.fromEntries(Object.entries(M).slice(-50)); say(`${r.morts.length} abonnement(s) expiré(s) mis de côté`); }
+  }
   writeFileSync('out/historique.enc', await chiffre(key, JSON.stringify(H)));
   copyFileSync('app.enc', 'out/app.enc'); copyFileSync('index.html', 'out/index.html'); copyFileSync('sel.json', 'out/sel.json');
   if(existsSync('static')) for(const f of readdirSync('static')) copyFileSync('static/'+f, 'out/'+f); // icônes, manifeste, service worker

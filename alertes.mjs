@@ -1,17 +1,22 @@
 // Historique quotidien (températures, probabilités, valeur de ton stock) et notifications du robot.
 // Tout ce qui est écrit est chiffré avec ton mot de passe ; les notifications sont chiffrées de bout en
 // bout (Web Push). Le journal public n'affiche que des nombres, jamais de contenu.
-import { createHash, createECDH } from 'node:crypto';
+import { createHash, createECDH, pbkdf2Sync } from 'node:crypto';
 
 const b64u = buf => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 // Clés « VAPID » (identité du robot auprès des services de notification), déduites du mot de passe :
 // toujours les mêmes, sans nouveau secret à configurer. La clé publique est fournie à la page.
+// 16/10 : calcul lent (600 000 tours, comme le chiffrement) : la clé publique, vue par les services de notification,
+// ne permet plus de deviner rapidement le mot de passe. L'ancienne clé (calcul rapide) reste utilisée en secours
+// pour les appareils pas encore réabonnés (ils se réabonnent tout seuls à leur prochaine ouverture).
+const paire = d => { const ec = createECDH('prime256v1'); ec.setPrivateKey(d); return { publicKey: b64u(ec.getPublicKey()), privateKey: b64u(d) }; };
 export function vapidKeys(motDePasse){
-  const d = createHash('sha256').update('carnet-vapid|' + motDePasse).digest();
-  const ec = createECDH('prime256v1'); ec.setPrivateKey(d);
-  return { publicKey: b64u(ec.getPublicKey()), privateKey: b64u(d) };
+  const k = paire(pbkdf2Sync(motDePasse, 'carnet-vapid-v2', 600000, 32, 'sha256'));
+  k.ancienne = paire(createHash('sha256').update('carnet-vapid|' + motDePasse).digest());
+  return k;
 }
+export const empreinte = endpoint => createHash('sha256').update(String(endpoint)).digest('hex').slice(0, 16);
 
 const LAB = { traditional:'📈 Actions', crypto:'◈ Crypto', metals:'🥇 Or & métaux', france:'🇫🇷 France', cross:'🔀 Risque combiné' };
 const ZW = ['🟢 vert (favorable)', '🟡 jaune (rien de spécial)', '🔴 rouge (prudence)'];
@@ -122,8 +127,11 @@ export function alertes(H, st, subs){
   // préparation des notifications, par appareil et selon ses préférences
   A.seen = A.seen || [];
   const out = [];
+  // 16/10 : abonnements expirés (appareil réinitialisé, navigateur désinstallé…) mis de côté, sauf s'ils ont été refaits depuis
+  const morts = (H.subMorts && !Array.isArray(H.subMorts)) ? H.subMorts : {};
   for(const s of subs || []){
     if(!s || !s.endpoint || !s.keys) continue;
+    const mort = morts[empreinte(s.endpoint)]; if(mort && !((s.at || 0) > mort)) continue;
     const pr = Object.assign({ zones:true, prevision:true, hebdo:true, pannes:true, agenda:true, matin:false, suivi:true }, s.prefs || {});
     if(!A.seen.includes(s.id)){ out.push({ s, title:'✅ Carnet : notifications activées', body:`Ce ${s.label || 'appareil'} recevra les alertes importantes, même quand le Carnet est fermé.`, url:'./', tag:'carnet-bienvenue' }); }
     const parts = [];
@@ -145,13 +153,19 @@ export function alertes(H, st, subs){
 }
 
 export async function envoyer(liste, vapid){
-  if(!liste.length) return { ok: 0, ko: 0 };
+  if(!liste.length) return { ok: 0, ko: 0, morts: [] };
   const webpush = (await import('web-push')).default;
-  webpush.setVapidDetails('https://tiranno06.github.io/carnet/', vapid.publicKey, vapid.privateKey);
-  let ok = 0, ko = 0;
+  const det = k => ({ subject: 'https://tiranno06.github.io/carnet/', publicKey: k.publicKey, privateKey: k.privateKey });
+  let ok = 0, ko = 0; const morts = [];
   for(const n of liste){
-    try{ await webpush.sendNotification({ endpoint: n.s.endpoint, keys: n.s.keys }, JSON.stringify({ title: n.title, body: n.body, url: n.url, tag: n.tag }), { TTL: 12*3600, urgency: 'normal' }); ok++; }
-    catch(e){ ko++; }
+    const sub = { endpoint: n.s.endpoint, keys: n.s.keys }, msg = JSON.stringify({ title: n.title, body: n.body, url: n.url, tag: n.tag });
+    const go = k => webpush.sendNotification(sub, msg, { TTL: 12*3600, urgency: 'normal', vapidDetails: det(k) });
+    try{ await go(vapid); ok++; }
+    catch(e){
+      let err = e;
+      if(vapid.ancienne && (e.statusCode === 401 || e.statusCode === 403)){ try{ await go(vapid.ancienne); ok++; continue; }catch(e2){ err = e2; } }
+      ko++; if(err.statusCode === 404 || err.statusCode === 410) morts.push(empreinte(n.s.endpoint));
+    }
   }
-  return { ok, ko };
+  return { ok, ko, morts };
 }
