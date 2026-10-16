@@ -72,6 +72,12 @@ try{
       return route.fulfill({ status: r.status(), body: await r.body(), headers: { 'content-type': r.headers()['content-type'] || 'text/plain; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
     }catch(e){ direct.repli++; return route.continue().catch(() => {}); }
   });
+  // 16/10 : fichiers que le site refuse à un navigateur mais accepte d'un serveur (FINRA : historique de la dette sur marge)
+  await ctx.route(/^https:\/\/www\.finra\.org\/.*\.xlsx$/, async route => {
+    try{ const r = await route.fetch({ headers: { 'user-agent': 'Mozilla/5.0', 'accept': '*/*' }, timeout: 20000 });
+      return route.fulfill({ status: r.status(), body: await r.body(), headers: { 'content-type': 'application/octet-stream', 'access-control-allow-origin': '*', 'cache-control': 'no-store' } }); }
+    catch(e){ return route.continue().catch(() => {}); }
+  });
   const page = await ctx.newPage();
   page.on('dialog', d => d.dismiss().catch(() => {}));
   let inflight = 0, lastNet = Date.now();
