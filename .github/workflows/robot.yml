@@ -54,6 +54,14 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --no-audit --no-fund
+      # 17/10 : ce que tes appareils ont déposé dans la boîte aux lettres du relais est rangé dans la branche coffre
+      - name: Boîte aux lettres des appareils
+        continue-on-error: true
+        run: node boite.mjs
+        env:
+          MOT_DE_PASSE: ${{ secrets.MOT_DE_PASSE }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
       - name: Passage du robot
         run: node robot.mjs
         env:
