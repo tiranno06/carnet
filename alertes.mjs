@@ -135,6 +135,11 @@ export function alertes(H, st, subs){
     Object.entries(st.div).forEach(([k, r]) => { if(!r) return; const s = r.sens || null;
       if(s && s !== A.div[k]) msgs.div.push(`${NOMS[k] || k} : ${s === 'baisse' ? `le prix monte (${pc(r.evo)} en ${r.jours} j) mais ${r.pires.length} indicateurs sur ${r.n} se dégradent` : `le prix baisse (${pc(r.evo)} en ${r.jours} j) mais ${r.mieux.length} indicateurs sur ${r.n} s'améliorent`}`);
       A.div[k] = s; }); }
+  // 3 undecies (17/10). bonne affaire sur une pièce d'or : prévenu quand elle apparaît (à nouveau après 7 jours au plus tôt)
+  msgs.affaires = [];
+  if(Array.isArray(st.affaires)){ A.aff = A.aff || {}; const vus = new Set();
+    st.affaires.forEach(x => { if(!x || !x.id) return; vus.add(x.id); if(!A.aff[x.id] || Date.now() - A.aff[x.id] > 7*86400000){ A.aff[x.id] = Date.now(); msgs.affaires.push(`${x.nom} chez ${x.m} : prime ${String(x.prime.toFixed(1)).replace('.', ',')} % (d'habitude ${String(x.med.toFixed(1)).replace('.', ',')} %)`); } });
+    Object.keys(A.aff).forEach(id => { if(!vus.has(id) && Date.now() - A.aff[id] > 7*86400000) delete A.aff[id]; }); }
   // 3 septies (09/10, n°12). nouveaux liens de vérification cassés
   if((st.liensNouv || []).length) msgs.liens.push(st.liensNouv.join(', '));
   // 4. résumé du dimanche matin (une fois par semaine)
@@ -172,6 +177,7 @@ export function alertes(H, st, subs){
     if(pr.zones && msgs.zones.length) parts.push(...msgs.zones);
     if(pr.prevision && msgs.prevision.length) parts.push(...msgs.prevision);
     if(parts.length) out.push({ s, title: parts.length === 1 ? 'Carnet : un changement' : `Carnet : ${parts.length} changements`, body: parts.join('\n'), url: msgs.prevision.length && pr.prevision ? './?vue=prevision' : './', tag:'carnet-alerte' });
+    if(pr.zones && msgs.affaires.length) out.push({ s, title:'🔥 Carnet : bonne affaire sur une pièce d\'or', body: msgs.affaires.join('\n') + '\nPrix affiché hors livraison ; vérifie sur le site avant d\'acheter.', url:'./?vue=mymetals', tag:'carnet-affaire' });
     if(pr.zones && msgs.div.length) out.push({ s, title:"🔀 Carnet : le prix et les indicateurs ne sont pas d'accord", body: msgs.div.join('\n') + '\nPas un signal d\'achat ou de vente : un moment pour ne rien décider sur un coup de tête.', url:'./', tag:'carnet-desaccord' });
     if(pr.hebdo && msgs.hebdo.length) out.push({ s, title:'📅 Carnet : résumé de la semaine', body: msgs.hebdo[0], url:'./', tag:'carnet-hebdo' });
     if(pr.hebdo && msgs.mois.length) out.push({ s, title:'🗓️ Carnet : que faire ce mois-ci ?', body: msgs.mois[0], url:'./', tag:'carnet-mois' });

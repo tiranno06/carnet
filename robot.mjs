@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
 import { relevePieces } from './pieces.mjs';
-import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe } from './donnees-plus.mjs';
+import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances } from './donnees-plus.mjs';
 
 const t0 = Date.now();
 const say = m => console.log(`[${Math.round((Date.now()-t0)/1000)} s] ${m}`);
@@ -16,7 +16,7 @@ if(!existsSync('app.enc')){ say("aucune application publiée pour l'instant : ri
 if(!MDP){ say('secret MOT_DE_PASSE pas encore configuré : rien à faire'); process.exit(0); }
 
 // mêmes familles de données que la page reprend (jamais de clé, jamais de donnée personnelle)
-const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|pieces_prix|or_plus|inities|wl_inities)/;
+const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|pieces_prix|pieces_hist|or_plus|inities|wl_inities)/;
 // 16/10 : les compteurs de quotas des services gratuits sont gardés d'un passage à l'autre (le robot passe bien plus souvent)
 
 const key = await cle(MDP, JSON.parse(readFileSync('sel.json', 'utf8')));
@@ -189,6 +189,8 @@ try{
       say(`liens de vérification : ${L.length} contrôlés, ${pb.filter(x => x.c==='casse').length} cassés, ${pb.filter(x => x.c!=='casse').length} refusent les robots ou ne répondent pas`);
     }
   }catch(e){ say('contrôle des liens impossible'); }
+  // 17/10 : pièces dont la prime est anormalement basse (d'après l'historique des relevés précédents)
+  try{ jour.affaires = await page.evaluate(() => { try{ return piecesAffaires(); }catch(e){ return null; } }); }catch(e){}
   enregistrer(H, jour);
   const al = alertes(H, jour, subs);
   say(`relevé du jour enregistré (${Object.keys(H.days).length} jours) ; alertes : ${Object.entries(al.counts).map(([k, n]) => k + ' ' + n).join(', ')}`);
@@ -235,7 +237,7 @@ try{
   // 17/10 : prix des pièces d'or chez les marchands (toutes les 6 h), repris par la page (Mes Métaux)
   try{
     const avant = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_prix') || 'null'); }catch(e){ return null; } });
-    if(!avant || Date.now() - (avant.at || 0) > 6*3600000){ const P = await relevePieces(); if(P.ok){ await page.evaluate(v => localStorage.setItem('mt_pieces_prix', v), JSON.stringify(P)); } say(`prix des pièces : ${P.ok} relevé(s), ${P.ko} manquant(s)`); }
+    if(!avant || Date.now() - (avant.at || 0) > 6*3600000){ const P = await relevePieces(); if(P.ok){ await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P)); } say(`prix des pièces : ${P.ok} relevé(s), ${P.ko} manquant(s)`); }
   }catch(e){ say('prix des pièces : relevé impossible'); }
   // 17/10 : or des banques centrales (FMI) et des ETF (GLD) une fois par jour ; achats des dirigeants toutes les 6 h
   try{
@@ -244,6 +246,7 @@ try{
     const O = (await lit('mt_or_plus')) || {}; let neuf = false;
     if(!O.bc || Date.now() - O.bc.at > 20*3600000){ try{ O.bc = await releveOrBanques(); neuf = true; }catch(e){ say('or des banques centrales : ' + e.message); } }
     if(!O.etf || Date.now() - O.etf.at > 20*3600000){ try{ O.etf = await releveOrEtf(); neuf = true; }catch(e){ say('or des ETF : ' + e.message); } }
+    if(!O.def || Date.now() - O.def.at > 20*3600000){ try{ O.def = await releveDefaillances(); neuf = true; }catch(e){ say('défaillances d\'entreprises : ' + e.message); } }
     if(neuf) await ecrit('mt_or_plus', O);
     const I = await lit('mt_inities');
     if(!I || Date.now() - I.at > 6*3600000){

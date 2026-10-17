@@ -93,3 +93,11 @@ export async function releveInitiesListe(symboles){
   }
   return out;
 }
+
+// ---- défaillances d'entreprises en France (INSEE, nombre mensuel corrigé des variations saisonnières) ----
+export async function releveDefaillances(){
+  const t = await lire('https://bdm.insee.fr/series/sdmx/data/SERIES_BDM/001656092?startPeriod=2005-01');
+  const mois = {}; for(const m of t.matchAll(/TIME_PERIOD="(\d{4}-\d{2})" OBS_VALUE="([\d.]+)"/g)) mois[m[1]] = +m[2];
+  if(Object.keys(mois).length < 120) throw new Error('INSEE : historique trop court');
+  return { at: Date.now(), mois };
+}
