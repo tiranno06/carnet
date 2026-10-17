@@ -1,6 +1,6 @@
 // Service worker : installation comme application, ouverture hors connexion, et notifications du robot.
 // Il ne touche qu'aux fichiers du site lui-même ; les données (chiffrées) ont leur propre copie locale.
-const C = 'carnet-v3';
+const C = 'carnet-v4';
 const SHELL = ['./', './index.html', './sel.json', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(C).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== C).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
