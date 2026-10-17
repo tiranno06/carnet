@@ -13,7 +13,8 @@ const b64u = buf => Buffer.from(buf).toString('base64').replace(/\+/g, '-').repl
 const paire = d => { const ec = createECDH('prime256v1'); ec.setPrivateKey(d); return { publicKey: b64u(ec.getPublicKey()), privateKey: b64u(d) }; };
 export function vapidKeys(motDePasse){
   const k = paire(pbkdf2Sync(motDePasse, 'carnet-vapid-v2', 600000, 32, 'sha256'));
-  k.ancienne = paire(createHash('sha256').update('carnet-vapid|' + motDePasse).digest());
+  // 17/10 : secours retiré automatiquement après le 15/11/2026 (tous les appareils ouverts d'ici là se seront réabonnés)
+  if(Date.now() < Date.UTC(2026, 10, 15)) k.ancienne = paire(createHash('sha256').update('carnet-vapid|' + motDePasse).digest());
   return k;
 }
 export const empreinte = endpoint => createHash('sha256').update(String(endpoint)).digest('hex').slice(0, 16);
