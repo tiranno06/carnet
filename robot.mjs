@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
 import { relevePieces } from './pieces.mjs';
-import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances } from './donnees-plus.mjs';
+import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope } from './donnees-plus.mjs';
 
 const t0 = Date.now();
 const say = m => console.log(`[${Math.round((Date.now()-t0)/1000)} s] ${m}`);
@@ -246,6 +246,7 @@ try{
     const O = (await lit('mt_or_plus')) || {}; let neuf = false;
     if(!O.bc || Date.now() - O.bc.at > 20*3600000){ try{ O.bc = await releveOrBanques(); neuf = true; }catch(e){ say('or des banques centrales : ' + e.message); } }
     if(!O.etf || Date.now() - O.etf.at > 20*3600000){ try{ O.etf = await releveOrEtf(); neuf = true; }catch(e){ say('or des ETF : ' + e.message); } }
+    if(!O.eu || Date.now() - O.eu.at > 20*3600000){ try{ O.eu = await releveEurope(); neuf = true; }catch(e){ say('Europe (INSEE, BCE) : ' + e.message); } }
     if(!O.def || Date.now() - O.def.at > 20*3600000){ try{ O.def = await releveDefaillances(); neuf = true; }catch(e){ say('défaillances d\'entreprises : ' + e.message); } }
     if(neuf) await ecrit('mt_or_plus', O);
     const I = await lit('mt_inities');

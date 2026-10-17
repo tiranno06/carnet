@@ -101,3 +101,19 @@ export async function releveDefaillances(){
   if(Object.keys(mois).length < 120) throw new Error('INSEE : historique trop court');
   return { at: Date.now(), mois };
 }
+
+// ---- Europe et France (17/10) : inflation hors tabac (INSEE), €STR, stress financier (BCE), taux des crédits immobiliers ----
+async function bce(cle){
+  const t = await lire(`https://data-api.ecb.europa.eu/service/data/${cle}?format=csvdata`), L = t.trim().split(/\r?\n/), h = L[0].split(','), iT = h.indexOf('TIME_PERIOD'), iV = h.indexOf('OBS_VALUE');
+  if(iT < 0 || iV < 0) throw new Error('BCE : format inattendu'); return L.slice(1).map(l => l.split(',')).map(c => [c[iT], +c[iV]]).filter(x => x[0] && isFinite(x[1]));
+}
+const moyMois = rows => { const S = {}, N = {}; rows.forEach(([d, v]) => { const k = d.slice(0, 7); S[k] = (S[k] || 0) + v; N[k] = (N[k] || 0) + 1; }); const o = {}; Object.keys(S).forEach(k => { o[k] = Math.round(S[k] / N[k] * 10000) / 10000; }); return o; };
+export async function releveEurope(){
+  const o = { at: Date.now() };
+  try{ const t = await lire('https://bdm.insee.fr/series/sdmx/data/SERIES_BDM/011814056'); const m = {}; for(const x of t.matchAll(/TIME_PERIOD="(\d{4}-\d{2})" OBS_VALUE="([\d.]+)"/g)) m[x[1]] = +x[2]; if(Object.keys(m).length > 200) o.ipc = m; }catch(e){}
+  try{ const r = await bce('EST/B.EU000A2X2A25.WT'); o.estr = moyMois(r); o.estrDer = r[r.length - 1]; }catch(e){}
+  try{ const r = await bce('CISS/D.U2.Z0Z.4F.EC.SS_CIN.IDX'); o.ciss = moyMois(r); o.cissDer = r[r.length - 1]; }catch(e){}
+  try{ const r = await bce('MIR/M.FR.B.A2C.A.R.A.2250.EUR.N'); o.immo = Object.fromEntries(r); }catch(e){}
+  if(!o.ipc && !o.estr && !o.ciss && !o.immo) throw new Error('INSEE et BCE injoignables');
+  return o;
+}
