@@ -58,12 +58,14 @@ try{
   const depuis = der ? (now - Date.parse(der.created_at)) / H : 99;
   if(depuis > 1.25){ say(`robot pas lancé depuis ${depuis.toFixed(1)} h`); relancer.add('robot.yml'); }
 }catch(e){ say('dernier passage du robot illisible'); }
+// 17/10 : métronome arrêté (aucun passage en cours ni en attente) → on le redémarre
+try{ let n = 0; for(const st of ['queued', 'in_progress', 'waiting', 'pending']){ n += ((await json(`actions/workflows/metronome.yml/runs?status=${st}&per_page=5`)).workflow_runs || []).length; } if(!n){ say('métronome arrêté'); relancer.add('metronome.yml'); } }catch(e){}
 for(const wf of relancer){
   await pause(5000);
   let reste = 0; for(const st of ['queued', 'in_progress']){ try{ reste += (await json(`actions/workflows/${wf}/runs?status=${st}&per_page=5`)).workflow_runs.length; }catch(e){} }
   if(reste){ say(`${wf} : un passage est déjà en route`); continue; }
   const d = await api(`actions/workflows/${wf}/dispatches`, { method: 'POST', body: JSON.stringify({ ref: 'main' }) });
-  say(`${wf === 'robot.yml' ? 'robot' : 'publication du site'} ${d.ok ? 'relancé' : 'relance refusée (' + d.status + ')'}`);
+  say(`${wf === 'robot.yml' ? 'robot' : (wf === 'metronome.yml' ? 'métronome' : 'publication du site')} ${d.ok ? 'relancé' : 'relance refusée (' + d.status + ')'}`);
 }
 
 // ---- 2. fraîcheur de ce que tu vois (dernière publication réussie du site, sinon dernières données) ----
@@ -109,15 +111,16 @@ try{
 try{
   const runs = (await json('actions/workflows/robot.yml/runs?event=workflow_dispatch&per_page=30')).workflow_runs || [];
   // 17/10 : lancements de cron-job.org reconnus à leur titre (l'appli et la publication lancent aussi le robot avec ton compte)
-  const tagues = runs.filter(r => r.display_title === 'robot (cron-job.org)');
+  // 17/10 : le métronome (sans jeton personnel) compte aussi comme lancement automatique
+  const tagues = runs.filter(r => r.display_title === 'robot (cron-job.org)' || r.display_title === 'robot (métronome)');
   const der = tagues.length ? tagues[0] : runs.find(r => r.triggering_actor && !/\[bot\]$/.test(r.triggering_actor.login));
   const ageH = der ? (now - Date.parse(der.created_at)) / H : 99;
   let msg = null;
   if(ageH > 2 && (!etat.cron || now - etat.cron >= 24*H)){
-    msg = { title: '⚠️ Carnet : le lancement automatique du robot est en panne', body: `Ton déclencheur (cron-job.org) n'a plus lancé le robot depuis ${ageH >= 99 ? 'longtemps' : Math.floor(ageH) + ' h'}. Le jeton GitHub a sans doute expiré : crée-en un nouveau et mets-le dans la tâche « robot carnet » de cron-job.org. En attendant, GitHub lance encore le robot de temps en temps.`, tag: 'carnet-cron' };
+    msg = { title: '⚠️ Carnet : le lancement automatique du robot est en panne', body: `Ni le métronome ni cron-job.org n'ont lancé le robot depuis ${ageH >= 99 ? 'longtemps' : Math.floor(ageH) + ' h'}. Le veilleur relance le métronome ; si ça dure, demande « révision du tableau de bord » à Claude Code. En attendant, GitHub lance encore le robot de temps en temps.`, tag: 'carnet-cron' };
     etat.cron = now; modif = true; say(`déclencheur extérieur muet depuis ${ageH.toFixed(1)} h`);
   } else if(ageH <= 2 && etat.cron){
-    msg = { title: '✅ Carnet : le lancement automatique du robot remarche', body: 'Le déclencheur cron-job.org lance de nouveau le robot.', tag: 'carnet-cron' };
+    msg = { title: '✅ Carnet : le lancement automatique du robot remarche', body: 'Le robot est de nouveau lancé toutes les 20 minutes.', tag: 'carnet-cron' };
     delete etat.cron; modif = true;
   }
   if(msg && !etatIllisible && MOT_DE_PASSE && existsSync('abonnements.enc')){

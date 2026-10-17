@@ -1,0 +1,26 @@
+name: metronome
+# 17/10 : relance le robot toutes les 20 min avec le jeton automatique de GitHub (il n'expire jamais, aucun jeton
+# personnel n'est nécessaire), puis se relance lui-même. cron-job.org et le veilleur restent en secours.
+# Le passage programmé toutes les 2 h ne sert qu'à redémarrer la chaîne si elle s'est arrêtée (une seule à la fois).
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */2 * * *'
+permissions:
+  actions: write
+concurrency:
+  group: metronome
+  cancel-in-progress: false
+jobs:
+  tic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Attendre 20 min, relancer le robot, puis relancer le métronome
+        env:
+          GH_TOKEN: ${{ github.token }}
+          API: https://api.github.com/repos/${{ github.repository }}/actions/workflows
+        run: |
+          sleep 1200
+          curl -sf -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$API/robot.yml/dispatches" -d '{"ref":"main","inputs":{"source":"metronome"}}' && echo "robot lancé" || echo "robot non lancé"
+          curl -sf -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$API/metronome.yml/dispatches" -d '{"ref":"main"}' && echo "métronome relancé" || { echo "::error::métronome non relancé (le passage programmé le redémarrera)"; exit 1; }

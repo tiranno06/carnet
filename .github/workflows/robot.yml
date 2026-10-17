@@ -1,6 +1,6 @@
 name: robot
 # 17/10 : les lancements de cron-job.org portent « source: cron » → titre à part, reconnu par le veilleur et Santé du Carnet
-run-name: ${{ inputs.source == 'cron' && 'robot (cron-job.org)' || 'robot' }}
+run-name: ${{ inputs.source == 'cron' && 'robot (cron-job.org)' || (inputs.source == 'metronome' && 'robot (métronome)' || 'robot') }}
 on:
   schedule:
     # 16/10 : demandé toutes les 15 min. GitHub saute la plupart des passages programmés (4 à 7 par jour
