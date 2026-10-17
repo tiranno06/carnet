@@ -7,6 +7,7 @@ import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
 import { relevePieces } from './pieces.mjs';
+import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe } from './donnees-plus.mjs';
 
 const t0 = Date.now();
 const say = m => console.log(`[${Math.round((Date.now()-t0)/1000)} s] ${m}`);
@@ -15,7 +16,7 @@ if(!existsSync('app.enc')){ say("aucune application publiée pour l'instant : ri
 if(!MDP){ say('secret MOT_DE_PASSE pas encore configuré : rien à faire'); process.exit(0); }
 
 // mêmes familles de données que la page reprend (jamais de clé, jamais de donnée personnelle)
-const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|pieces_prix)/;
+const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|pieces_prix|or_plus|inities|wl_inities)/;
 // 16/10 : les compteurs de quotas des services gratuits sont gardés d'un passage à l'autre (le robot passe bien plus souvent)
 
 const key = await cle(MDP, JSON.parse(readFileSync('sel.json', 'utf8')));
@@ -234,6 +235,20 @@ try{
     const avant = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_prix') || 'null'); }catch(e){ return null; } });
     if(!avant || Date.now() - (avant.at || 0) > 6*3600000){ const P = await relevePieces(); if(P.ok){ await page.evaluate(v => localStorage.setItem('mt_pieces_prix', v), JSON.stringify(P)); } say(`prix des pièces : ${P.ok} relevé(s), ${P.ko} manquant(s)`); }
   }catch(e){ say('prix des pièces : relevé impossible'); }
+  // 17/10 : or des banques centrales (FMI) et des ETF (GLD) une fois par jour ; achats des dirigeants toutes les 6 h
+  try{
+    const lit = k => page.evaluate(k => { try{ return JSON.parse(localStorage.getItem(k) || 'null'); }catch(e){ return null; } }, k);
+    const ecrit = (k, v) => page.evaluate(([k, v]) => localStorage.setItem(k, v), [k, JSON.stringify(v)]);
+    const O = (await lit('mt_or_plus')) || {}; let neuf = false;
+    if(!O.bc || Date.now() - O.bc.at > 20*3600000){ try{ O.bc = await releveOrBanques(); neuf = true; }catch(e){ say('or des banques centrales : ' + e.message); } }
+    if(!O.etf || Date.now() - O.etf.at > 20*3600000){ try{ O.etf = await releveOrEtf(); neuf = true; }catch(e){ say('or des ETF : ' + e.message); } }
+    if(neuf) await ecrit('mt_or_plus', O);
+    const I = await lit('mt_inities');
+    if(!I || Date.now() - I.at > 6*3600000){
+      try{ await ecrit('mt_inities', await releveInitiesMarche(I)); }catch(e){ say('dirigeants (marché) : ' + e.message); }
+      try{ const syms = await page.evaluate(() => { try{ return wlLoad().map(x => x.s); }catch(e){ return []; } }); await ecrit('mt_wl_inities', await releveInitiesListe(syms)); }catch(e){ say('dirigeants (liste de suivi) : relevé impossible'); }
+    }
+  }catch(e){ say('or et dirigeants : relevé impossible'); }
   // 3) on récupère l'état (filtré) et on le chiffre
   const st = await page.evaluate(async reSrc => {
     const re = new RegExp(reSrc), ls = {};
@@ -267,7 +282,10 @@ try{
         const HG = { v: 1, days: {}, bul: H.bul, bulHist: H.bulHist, sante: H.sante, liens: H.liens, ...(voir.plan ? { dca: H.dca, dcaLast: H.dcaLast, matin: H.matin } : {}), ...(voir.suivi ? { wlv: H.wlv } : {}) };
         Object.entries(H.days || {}).forEach(([d, x]) => { if(!x) return; const { mv, ...reste } = x; HG.days[d] = voir.metaux && mv ? { ...reste, mv } : reste; });
         writeFileSync('out/invite-app.enc', await chiffre(kg, sansCles));
-        writeFileSync('out/invite-data.enc', await chiffre(kg, JSON.stringify({ v: 1, at: snap.at, ls: snap.ls, idb: snap.idb, perso: persoG, invite: voir })));
+        // liste de suivi non partagée : rien qui la révèle (analyses mt_wl_…, données en cache portant un de ses codes)
+        let codes = []; try{ codes = JSON.parse(perso.mt_watchlist || '[]').map(x => x && x.s).filter(s => s && s.length >= 3); }catch(e){}
+        const cache = o => voir.suivi ? o : Object.fromEntries(Object.entries(o || {}).filter(([k]) => !/^mt_wl_/.test(k) && !codes.some(s => k.includes(s))));
+        writeFileSync('out/invite-data.enc', await chiffre(kg, JSON.stringify({ v: 1, at: snap.at, ls: cache(snap.ls), idb: cache(snap.idb), perso: persoG, invite: voir })));
         writeFileSync('out/invite-hist.enc', await chiffre(kg, JSON.stringify(HG)));
         say('accès invité : fichiers préparés');
       }
