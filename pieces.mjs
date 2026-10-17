@@ -9,17 +9,24 @@ export const PIECES = [
   { id:'krugerrand', nom:'Krugerrand 1 once', fin:31.103, s:{ aucoffre:['or/krugerrand', /^Krugerrand 1 once$/], bdor:'krugerrand', abacor:'piece-d-or-krugerrand' } },
   { id:'dollar20', nom:'20 Dollars US', fin:30.093, s:{ bdor:'20-dollars-or', abacor:'piece-20-dollars-us' } },
   { id:'pesos50', nom:'50 Pesos mexicains', fin:37.5, s:{ bdor:'50-pesos-or' } },
+  // 17/10 : pièces d'argent (fin = grammes d'argent pur ; adresse complète quand elle commence par « / »)
+  { id:'ag5fSemeuse', metal:'argent', nom:'5 Francs Semeuse (argent)', fin:10.02, s:{ bdor:'/produits-d-investissement-or/cours-prix-pieces-d-argent/5-francs-semeuse-argent', abacor:'piece-d-argent-5-francs-semeuse' } },
+  { id:'ag10fHercule', metal:'argent', nom:'10 Francs Hercule (argent)', fin:22.5, s:{ bdor:'/produits-d-investissement-or/cours-prix-pieces-d-argent/10-francs-hercule-argent', abacor:'piece-d-argent-10-francs-hercule' } },
+  { id:'ag50fHercule', metal:'argent', nom:'50 Francs Hercule (argent)', fin:27, s:{ bdor:'/produits-d-investissement-or/cours-prix-pieces-d-argent/50-francs-hercule-argent', abacor:'piece-d-argent-50-francs-hercule' } },
+  { id:'agMaple', metal:'argent', nom:'Maple Leaf 1 once (argent)', fin:31.103, s:{ bdor:'/produits-d-investissement-or/cours-prix-pieces-d-argent/maple-leaf-argent' } },
+  { id:'agPhilharmonique', metal:'argent', nom:'Philharmonique 1 once (argent)', fin:31.103, s:{ bdor:'/produits-d-investissement-or/cours-prix-pieces-d-argent/vienna-philharmonic-argent' } },
+  { id:'agBritannia', metal:'argent', nom:'Britannia 1 once (argent)', fin:31.103, s:{ bdor:'/produits-d-investissement-or/cours-prix-pieces-d-argent/britannia-argent' } },
 ];
 const MARCHANDS = {
   aucoffre: { nom:'AuCOFFRE', url: p => 'https://www.aucoffre.com/' + p },
-  bdor: { nom:'BDOR', url: p => 'https://www.bdor.fr/produits-d-investissement-or/cours-prix-pieces-d-or/' + p },
+  bdor: { nom:'BDOR', url: p => p.startsWith('/') ? 'https://www.bdor.fr' + p : 'https://www.bdor.fr/produits-d-investissement-or/cours-prix-pieces-d-or/' + p },
   abacor: { nom:'Abacor', url: p => 'https://www.abacor.fr/produit/' + p + '/' },
 };
 const lire = async url => { const r = await fetch(url, { headers: { 'user-agent': UA, 'accept-language': 'fr-FR,fr;q=0.9' }, redirect: 'follow', signal: AbortSignal.timeout(20000) }); if(!r.ok) throw new Error('HTTP ' + r.status); return r.text(); };
 const texte = h => h.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, '|').replace(/&nbsp;|&#160;/g, ' ').replace(/&eacute;/g, 'é').replace(/&amp;/g, '&').replace(/\s+/g, ' ').replace(/(\| ?)+/g, '|');
 const euros = s => { const v = parseFloat(String(s).replace(/[\s  ]/g, '').replace(',', '.')); return isFinite(v) && v > 0 ? v : null; };
 // prix des données structurées schema.org (le premier « price » plausible)
-function prixStructure(h){ for(const m of h.matchAll(/"price"\s*:\s*"?([\d.]+)"?/g)){ const v = parseFloat(m[1]); if(v > 20 && v < 100000) return v; } return null; }
+function prixStructure(h){ for(const m of h.matchAll(/"price"\s*:\s*"?([\d.]+)"?/g)){ const v = parseFloat(m[1]); if(v > 5 && v < 100000) return v; } return null; }
 // liste AuCOFFRE : « Acheter | nom | catégorie | flèche | % | … | prix € »
 function prixListe(h, re){ const S = texte(h).split('|').map(x => x.trim());
   for(let i = 0; i < S.length - 2; i++) if(S[i] === 'Acheter' && re.test(S[i+1])){ for(let j = i + 2; j < Math.min(i + 9, S.length); j++){ if(/^[\d\s  ]+,\d\d €$/.test(S[j])) return euros(S[j].replace('€', '')); } }
@@ -36,7 +43,7 @@ export async function relevePieces(){
         if(prix){ L.push({ m: MARCHANDS[m].nom, prix, url }); ok++; } else ko++;
       }catch(e){ ko++; }
     }
-    if(L.length) out.pieces[P.id] = { nom: P.nom, fin: P.fin, offres: L.sort((a, b) => a.prix - b.prix) };
+    if(L.length) out.pieces[P.id] = { nom: P.nom, fin: P.fin, metal: P.metal || 'or', offres: L.sort((a, b) => a.prix - b.prix) };
   }
   out.ok = ok; out.ko = ko;
   return out;

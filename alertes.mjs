@@ -55,6 +55,8 @@ export function enregistrer(H, st){
   if(Array.isArray(st.wl)){ H.wlv = H.wlv || []; const der = {}; H.wlv.forEach(x => { der[x.s] = x; });
     st.wl.forEach(x => { if(!x || !x.s || !x.v || x.v === 'na' || !(x.p > 0)) return; if(!der[x.s] || der[x.s].v !== x.v) H.wlv.push({ d: date, s: x.s, n: x.n, v: x.v, p: x.p }); });
     if(H.wlv.length > 400) H.wlv = H.wlv.slice(-400); }
+  // 17/10 : intégrité des fichiers du site (lue par la Santé du Carnet)
+  if(Array.isArray(st.integrite)) H.integrite = { at: Date.now(), ko: st.integrite.slice(0, 20) };
   // scores de chaque indicateur, jour par jour (les 60 derniers jours de l'appareil du robot, puis l'historique s'allonge)
   Object.entries(st.sv || {}).forEach(([d, v]) => { if(/^\d{4}-\d{2}-\d{2}$/.test(d) && v) (H.days[d] = H.days[d] || {}).sv = v; });
   return H;
@@ -140,6 +142,12 @@ export function alertes(H, st, subs){
   if(Array.isArray(st.affaires)){ A.aff = A.aff || {}; const vus = new Set();
     st.affaires.forEach(x => { if(!x || !x.id) return; vus.add(x.id); if(!A.aff[x.id] || Date.now() - A.aff[x.id] > 7*86400000){ A.aff[x.id] = Date.now(); msgs.affaires.push(`${x.nom} chez ${x.m} : prime ${String(x.prime.toFixed(1)).replace('.', ',')} % (d'habitude ${String(x.med.toFixed(1)).replace('.', ',')} %)`); } });
     Object.keys(A.aff).forEach(id => { if(!vus.has(id) && Date.now() - A.aff[id] > 7*86400000) delete A.aff[id]; }); }
+  // 3 duodecies (17/10). fichiers du site différents de la publication : prévenu après 3 passages de suite (évite une fausse
+  // alerte pendant les quelques minutes où une mise à jour du robot précède la nouvelle publication)
+  msgs.integrite = [];
+  if(Array.isArray(st.integrite)){ const sig = st.integrite.slice().sort().join(','); A.integ = A.integ || { n: 0, sig: '', dit: '' };
+    if(!sig){ A.integ = { n: 0, sig: '', dit: '' }; }
+    else { A.integ.n = A.integ.sig === sig ? A.integ.n + 1 : 1; A.integ.sig = sig; if(A.integ.n >= 3 && A.integ.dit !== sig){ A.integ.dit = sig; msgs.integrite.push(st.integrite.slice(0, 6).join(', ')); } } }
   // 3 septies (09/10, n°12). nouveaux liens de vérification cassés
   if((st.liensNouv || []).length) msgs.liens.push(st.liensNouv.join(', '));
   // 4. résumé du dimanche matin (une fois par semaine)
@@ -177,6 +185,7 @@ export function alertes(H, st, subs){
     if(pr.zones && msgs.zones.length) parts.push(...msgs.zones);
     if(pr.prevision && msgs.prevision.length) parts.push(...msgs.prevision);
     if(parts.length) out.push({ s, title: parts.length === 1 ? 'Carnet : un changement' : `Carnet : ${parts.length} changements`, body: parts.join('\n'), url: msgs.prevision.length && pr.prevision ? './?vue=prevision' : './', tag:'carnet-alerte' });
+    if(msgs.integrite.length) out.push({ s, title:'🛡️ Carnet : fichiers du site modifiés', body: 'Différents de la dernière publication : ' + msgs.integrite[0] + ". Si ce n'est pas une mise à jour de ta part ou de Claude, demande une vérification à Claude Code avant de saisir ton mot de passe.", url:'./', tag:'carnet-integrite' });
     if(pr.zones && msgs.affaires.length) out.push({ s, title:'🔥 Carnet : bonne affaire sur une pièce d\'or', body: msgs.affaires.join('\n') + '\nPrix affiché hors livraison ; vérifie sur le site avant d\'acheter.', url:'./?vue=mymetals', tag:'carnet-affaire' });
     if(pr.zones && msgs.div.length) out.push({ s, title:"🔀 Carnet : le prix et les indicateurs ne sont pas d'accord", body: msgs.div.join('\n') + '\nPas un signal d\'achat ou de vente : un moment pour ne rien décider sur un coup de tête.', url:'./', tag:'carnet-desaccord' });
     if(pr.hebdo && msgs.hebdo.length) out.push({ s, title:'📅 Carnet : résumé de la semaine', body: msgs.hebdo[0], url:'./', tag:'carnet-hebdo' });

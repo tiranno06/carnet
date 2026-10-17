@@ -22,6 +22,11 @@ const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshnes
 const key = await cle(MDP, JSON.parse(readFileSync('sel.json', 'utf8')));
 let html;
 try{ html = await dechiffre(key, readFileSync('app.enc', 'utf8')); }catch(e){ say('déchiffrement impossible (mot de passe différent de celui de la publication ?)'); process.exit(1); }
+// 17/10 : intégrité des fichiers du site (empreintes calculées à la publication et rangées dans l'appli chiffrée)
+let integrite = null;
+try{ const m = html.match(/\(\/\*__EMPREINTES__\*\/(\{[^)]*\})\)/), E = m ? JSON.parse(m[1]) : {};
+  if(Object.keys(E).length){ const { createHash } = await import('node:crypto'); integrite = Object.keys(E).filter(f => !existsSync(f) || createHash('sha256').update(readFileSync(f)).digest('hex') !== E[f]); }
+}catch(e){}
 let prev = null;
 // 17/10 : un état présent mais illisible arrête le robot (avant, il repartait de zéro et écrasait tout l'historique)
 if(existsSync('site/data.enc')){ try{ prev = JSON.parse(await dechiffre(key, readFileSync('site/data.enc', 'utf8'))); }catch(e){ say('état précédent illisible : passage arrêté pour ne rien effacer'); process.exit(1); } }
@@ -189,6 +194,7 @@ try{
       say(`liens de vérification : ${L.length} contrôlés, ${pb.filter(x => x.c==='casse').length} cassés, ${pb.filter(x => x.c!=='casse').length} refusent les robots ou ne répondent pas`);
     }
   }catch(e){ say('contrôle des liens impossible'); }
+  jour.integrite = integrite;
   // 17/10 : pièces dont la prime est anormalement basse (d'après l'historique des relevés précédents)
   try{ jour.affaires = await page.evaluate(() => { try{ return piecesAffaires(); }catch(e){ return null; } }); }catch(e){}
   enregistrer(H, jour);
