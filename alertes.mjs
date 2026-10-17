@@ -21,6 +21,7 @@ export const empreinte = endpoint => createHash('sha256').update(String(endpoint
 
 const LAB = { traditional:'📈 Actions', crypto:'◈ Crypto', metals:'🥇 Or & métaux', france:'🇫🇷 France', cross:'🔀 Risque combiné' };
 const ZW = ['🟢 vert (favorable)', '🟡 jaune (rien de spécial)', '🔴 rouge (prudence)'];
+const VERDICT = { bon:"🟢 plutôt favorable (d'après le passé)", neutre:'🟡 rien de spécial', prudence:"🔴 n'en rachète pas plus" };
 const zoneOf = t => t >= 66 ? 2 : (t >= 33 ? 1 : 0);
 // changement de zone seulement si la limite est franchie d'au moins 3 points (évite les allers-retours)
 function zoneWithMargin(t, prevZ){
@@ -56,7 +57,7 @@ export function enregistrer(H, st){
 
 export function alertes(H, st, subs){
   const A = H.alerts = H.alerts || {}; const now = parisNow();
-  const msgs = { zones: [], prevision: [], hebdo: [], pannes: [], agenda: [], matin: [], xc: [], susp: [], wl: [], liens: [] };
+  const msgs = { zones: [], prevision: [], hebdo: [], pannes: [], agenda: [], matin: [], xc: [], susp: [], wl: [], wlv: [], liens: [] };
   // 1. zones des températures
   A.z = A.z || {};
   Object.entries(st.t || {}).forEach(([k, t]) => {
@@ -107,7 +108,11 @@ export function alertes(H, st, subs){
   A.wl = A.wl || {};
   if(Array.isArray(st.wl)){ const vusWl = new Set();
     st.wl.forEach(x => { vusWl.add(x.s); const on = (x.al || []).length > 0; if(on && !A.wl[x.s]) msgs.wl.push(`${x.n} : ${x.al.join(' ; ')}`); A.wl[x.s] = on; });
-    Object.keys(A.wl).forEach(s => { if(!vusWl.has(s)) delete A.wl[s]; }); }
+    Object.keys(A.wl).forEach(s => { if(!vusWl.has(s)) delete A.wl[s]; });
+    // 17/10 : verdict « Que faire ? » qui change (🟡 → 🟢…) : prévenu une fois, au changement
+    A.wlv = A.wlv || {};
+    st.wl.forEach(x => { if(!x.v || x.v === 'na') return; const avant = A.wlv[x.s]; if(avant && avant !== x.v) msgs.wlv.push(`${x.n} : ${VERDICT[avant] || avant} → ${VERDICT[x.v] || x.v}`); A.wlv[x.s] = x.v; });
+    Object.keys(A.wlv).forEach(s => { if(!vusWl.has(s)) delete A.wlv[s]; }); }
   // 3 octies (16/10). sites dont la présentation a changé : prévenu une fois par page (et quand elle revient)
   A.fmt = A.fmt || {}; msgs.format = [];
   if(Array.isArray(st.fmt)){ const fNow = new Set(st.fmt);
@@ -157,6 +162,7 @@ export function alertes(H, st, subs){
     if(pr.pannes && msgs.xc.length) out.push({ s, title:'🔎 Carnet : deux sources ne sont pas d\'accord', body: msgs.xc.join(', ') + ' — écart anormal depuis 3 passages du robot. Détail : Réglages › Diagnostic › contrôle croisé.', url:'./', tag:'carnet-xc' });
     if(pr.pannes && msgs.susp.length) out.push({ s, title:'⚠️ Carnet : valeur à vérifier', body: msgs.susp.slice(0, 5).join(', ') + ' — variation du jour bien plus forte que tout ce qui a été relevé. Erreur de source ou vrai événement ?', url:'./', tag:'carnet-susp' });
     if(pr.suivi && msgs.wl.length) out.push({ s, title: msgs.wl.length === 1 ? '👀 Carnet : ta liste de suivi' : `👀 Carnet : ${msgs.wl.length} alertes de ta liste de suivi`, body: msgs.wl.join('\n'), url:'./', tag:'carnet-suivi' });
+    if(pr.suivi && msgs.wlv.length) out.push({ s, title: msgs.wlv.length === 1 ? '👀 Carnet : un verdict de ta liste de suivi a changé' : `👀 Carnet : ${msgs.wlv.length} verdicts de ta liste de suivi ont changé`, body: msgs.wlv.join('\n') + '\nCe que disait le passé, pas une garantie.', url:'./', tag:'carnet-wlv' });
     if(pr.pannes && msgs.format.length) out.push({ s, title:'🧩 Carnet : un site a changé sa présentation', body: msgs.format.join(', ') + ' — le Carnet ne reconnaît plus la page : il utilise la source de secours (ou la dernière valeur connue) et réessaie toutes les 6 h.', url:'./', tag:'carnet-format' });
     if(pr.pannes && msgs.liens.length) out.push({ s, title:'🔗 Carnet : lien de vérification cassé', body: msgs.liens[0] + ' — détail dans Réglages › Avancé › Liens de vérification.', url:'./', tag:'carnet-liens' });
     if(pr.agenda && msgs.agenda.length) out.push({ s, title:'📅 Carnet : demain, annonce importante', body: msgs.agenda[0], url:'./', tag:'carnet-agenda' });
