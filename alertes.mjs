@@ -118,6 +118,11 @@ export function alertes(H, st, subs){
   if(Array.isArray(st.fmt)){ const fNow = new Set(st.fmt);
     fNow.forEach(k => { if(!A.fmt[k]){ A.fmt[k] = now.date; msgs.format.push(k); } });
     Object.keys(A.fmt).forEach(k => { if(!fNow.has(k)) delete A.fmt[k]; }); }
+  // 3 nonies (17/10). série toujours en retard après 1 jour de réparations automatiques : prévenu une fois (et quand c'est réglé)
+  msgs.retard = []; msgs.repare = [];
+  if(Array.isArray(st.retard)){ A.retard = A.retard || {}; const R = new Set(st.retard);
+    R.forEach(n => { const e = A.retard[n] || (A.retard[n] = { d: Date.now() }); if(!e.dit && Date.now() - e.d > 24*3600000){ e.dit = 1; msgs.retard.push(n); } });
+    Object.keys(A.retard).forEach(n => { if(!R.has(n)){ if(A.retard[n].dit) msgs.repare.push(n); delete A.retard[n]; } }); }
   // 3 septies (09/10, n°12). nouveaux liens de vérification cassés
   if((st.liensNouv || []).length) msgs.liens.push(st.liensNouv.join(', '));
   // 4. résumé du dimanche matin (une fois par semaine)
@@ -163,6 +168,8 @@ export function alertes(H, st, subs){
     if(pr.pannes && msgs.susp.length) out.push({ s, title:'⚠️ Carnet : valeur à vérifier', body: msgs.susp.slice(0, 5).join(', ') + ' — variation du jour bien plus forte que tout ce qui a été relevé. Erreur de source ou vrai événement ?', url:'./', tag:'carnet-susp' });
     if(pr.suivi && msgs.wl.length) out.push({ s, title: msgs.wl.length === 1 ? '👀 Carnet : ta liste de suivi' : `👀 Carnet : ${msgs.wl.length} alertes de ta liste de suivi`, body: msgs.wl.join('\n'), url:'./', tag:'carnet-suivi' });
     if(pr.suivi && msgs.wlv.length) out.push({ s, title: msgs.wlv.length === 1 ? '👀 Carnet : un verdict de ta liste de suivi a changé' : `👀 Carnet : ${msgs.wlv.length} verdicts de ta liste de suivi ont changé`, body: msgs.wlv.join('\n') + '\nCe que disait le passé, pas une garantie.', url:'./', tag:'carnet-wlv' });
+    if(pr.pannes && msgs.retard.length) out.push({ s, title:'🕰️ Carnet : donnée toujours en retard', body: msgs.retard.join(', ') + " — pas de nouvelle publication depuis bien plus longtemps que d'habitude, et aucune source de remplacement trouvée depuis 1 jour. Le Carnet continue de chercher ; demande « révision du tableau de bord » à Claude Code si ça dure.", url:'./', tag:'carnet-retard' });
+    if(pr.pannes && msgs.repare.length) out.push({ s, title:'✅ Carnet : donnée de nouveau à jour', body: msgs.repare.join(', '), url:'./', tag:'carnet-retard' });
     if(pr.pannes && msgs.format.length) out.push({ s, title:'🧩 Carnet : un site a changé sa présentation', body: msgs.format.join(', ') + ' — le Carnet ne reconnaît plus la page : il utilise la source de secours (ou la dernière valeur connue) et réessaie toutes les 6 h.', url:'./', tag:'carnet-format' });
     if(pr.pannes && msgs.liens.length) out.push({ s, title:'🔗 Carnet : lien de vérification cassé', body: msgs.liens[0] + ' — détail dans Réglages › Avancé › Liens de vérification.', url:'./', tag:'carnet-liens' });
     if(pr.agenda && msgs.agenda.length) out.push({ s, title:'📅 Carnet : demain, annonce importante', body: msgs.agenda[0], url:'./', tag:'carnet-agenda' });

@@ -153,6 +153,8 @@ try{
     try{ o.mois = typeof moisLines==='function' ? moisLines() : null; }catch(e){}
     // 16/10 : pages dont la présentation a changé (mises de côté, source de secours utilisée)
     try{ o.fmt = Object.entries(JSON.parse(localStorage.getItem('mt_format_ko')||'{}')).filter(([, e]) => e && e.n >= 3).map(([k]) => k.split('?')[0].slice(0, 70)); }catch(e){}
+    // 17/10 : séries encore anormalement anciennes après les essais de réparation (source d'origine, remplaçante FRED, relais de marché)
+    try{ o.retard = typeof getStaleDataList==='function' ? getStaleDataList().map(x => (x.label || x.key).slice(0, 60)) : null; }catch(e){}
     // 09/10 (n°13) : contrôles de cohérence en désaccord
     try{ o.xc = (window.__xcheck || []).filter(x => x && x.ok === false).map(x => x.name.replace(/\s*\(\d{2}\/\d{2}\/\d{4}\)/, '')); }catch(e){}
     // 09/10 (n°10) : bulletin du matin (5 lignes)
