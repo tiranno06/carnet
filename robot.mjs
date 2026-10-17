@@ -264,7 +264,7 @@ try{
         const montre = k => /^mt_(temp_exclus|temp_util|ind_hidden)$/.test(k) || (voir.metaux && /^mt_(metals_(or|argent|cuivre)|metal_objectif_|metals_value_history)/.test(k))
           || (voir.plan && /^mt_(dca_plan|fonds_euros|trad_rule)$/.test(k)) || (voir.suivi && k === 'mt_watchlist');
         const persoG = Object.fromEntries(Object.entries(perso).filter(([k]) => montre(k)));
-        const HG = { v: 1, days: {}, bul: H.bul, bulHist: H.bulHist, sante: H.sante, liens: H.liens, ...(voir.plan ? { dca: H.dca, dcaLast: H.dcaLast, matin: H.matin } : {}) };
+        const HG = { v: 1, days: {}, bul: H.bul, bulHist: H.bulHist, sante: H.sante, liens: H.liens, ...(voir.plan ? { dca: H.dca, dcaLast: H.dcaLast, matin: H.matin } : {}), ...(voir.suivi ? { wlv: H.wlv } : {}) };
         Object.entries(H.days || {}).forEach(([d, x]) => { if(!x) return; const { mv, ...reste } = x; HG.days[d] = voir.metaux && mv ? { ...reste, mv } : reste; });
         writeFileSync('out/invite-app.enc', await chiffre(kg, sansCles));
         writeFileSync('out/invite-data.enc', await chiffre(kg, JSON.stringify({ v: 1, at: snap.at, ls: snap.ls, idb: snap.idb, perso: persoG, invite: voir })));

@@ -50,6 +50,11 @@ export function enregistrer(H, st){
     st.allSrc.forEach(n => { if(!S.vu[n]) S.vu[n] = date; S.der[n] = date; });
     const lim = new Date(Date.now() - 35*86400000).toISOString().slice(0, 10); Object.keys(S.jours).forEach(d => { if(d < lim) delete S.jours[d]; });
   }
+  // 17/10 : journal des verdicts « Que faire ? » de la liste de suivi (un relevé à chaque changement, avec le prix du jour),
+  // pour le bulletin de notes du Carnet ; st.wl absent = mesure impossible ce passage-ci, on ne note rien
+  if(Array.isArray(st.wl)){ H.wlv = H.wlv || []; const der = {}; H.wlv.forEach(x => { der[x.s] = x; });
+    st.wl.forEach(x => { if(!x || !x.s || !x.v || x.v === 'na' || !(x.p > 0)) return; if(!der[x.s] || der[x.s].v !== x.v) H.wlv.push({ d: date, s: x.s, n: x.n, v: x.v, p: x.p }); });
+    if(H.wlv.length > 400) H.wlv = H.wlv.slice(-400); }
   // scores de chaque indicateur, jour par jour (les 60 derniers jours de l'appareil du robot, puis l'historique s'allonge)
   Object.entries(st.sv || {}).forEach(([d, v]) => { if(/^\d{4}-\d{2}-\d{2}$/.test(d) && v) (H.days[d] = H.days[d] || {}).sv = v; });
   return H;
