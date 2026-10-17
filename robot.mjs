@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, readd
 import http from 'node:http';
 import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
-import { vapidKeys, enregistrer, alertes, envoyer } from './alertes.mjs';
+import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
 
 const t0 = Date.now();
 const say = m => console.log(`[${Math.round((Date.now()-t0)/1000)} s] ${m}`);
@@ -21,15 +21,16 @@ const key = await cle(MDP, JSON.parse(readFileSync('sel.json', 'utf8')));
 let html;
 try{ html = await dechiffre(key, readFileSync('app.enc', 'utf8')); }catch(e){ say('déchiffrement impossible (mot de passe différent de celui de la publication ?)'); process.exit(1); }
 let prev = null;
-if(existsSync('site/data.enc')){ try{ prev = JSON.parse(await dechiffre(key, readFileSync('site/data.enc', 'utf8'))); }catch(e){ say('état précédent illisible : on repart de zéro'); } }
+// 17/10 : un état présent mais illisible arrête le robot (avant, il repartait de zéro et écrasait tout l'historique)
+if(existsSync('site/data.enc')){ try{ prev = JSON.parse(await dechiffre(key, readFileSync('site/data.enc', 'utf8'))); }catch(e){ say('état précédent illisible : passage arrêté pour ne rien effacer'); process.exit(1); } }
 // tes données personnelles (stock de métaux…) : lues seulement pour calculer la valeur du jour, jamais recopiées en clair
 const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule|temp_exclus|temp_util)/; // 16/10 : + ta règle pour les actions, tes choix d'indicateurs comptés dans les températures
 let perso = {};
-if(existsSync('coffre.enc')){ try{ perso = JSON.parse(await dechiffre(key, readFileSync('coffre.enc', 'utf8'))).data || {}; }catch(e){ say('coffre illisible'); } }
+if(existsSync('coffre.enc')){ try{ perso = JSON.parse(await dechiffre(key, readFileSync('coffre.enc', 'utf8'))).data || {}; }catch(e){ say('coffre illisible : passage arrêté'); process.exit(1); } }
 let subs = [];
 if(existsSync('abonnements.enc')){ try{ subs = JSON.parse(await dechiffre(key, readFileSync('abonnements.enc', 'utf8'))).subs || []; }catch(e){ say('abonnements illisibles'); } }
 let H = { v:1, days:{}, alerts:{} };
-if(existsSync('site/historique.enc')){ try{ H = JSON.parse(await dechiffre(key, readFileSync('site/historique.enc', 'utf8'))); }catch(e){ say('historique illisible : on repart de zéro'); } }
+if(existsSync('site/historique.enc')){ try{ H = JSON.parse(await dechiffre(key, readFileSync('site/historique.enc', 'utf8'))); }catch(e){ say('historique illisible : passage arrêté pour ne rien effacer'); process.exit(1); } }
 const vapid = vapidKeys(MDP);
 
 const srv = http.createServer((req, res) => {
@@ -130,8 +131,8 @@ try{
   // 09/10 : données du Guide (indice Monde) et contrôles de cohérence, utilisés par le relevé ci-dessous
   await page.evaluate(async () => { try{ if(!window.__coursLastD && typeof coursLiveData==='function') window.__coursLastD = await coursLiveData(); }catch(e){} try{ if(!window.__xcheckAt && typeof runCrossChecks==='function') await runCrossChecks(); }catch(e){} }).catch(() => {});
   // 09/10 (n°10) : ta liste de suivi — mesures du jour et alertes (le contenu reste chiffré, seul un nombre va au journal)
-  let wl = [];
-  try{ wl = await page.evaluate(async () => { try{ return typeof wlComputeAll==='function' ? await wlComputeAll() : []; }catch(e){ return []; } }); }catch(e){}
+  let wl = null; // 17/10 : null = mesure impossible (les alertes de la liste ne sont alors pas remises à zéro)
+  try{ wl = await page.evaluate(async () => { try{ return typeof wlComputeAll==='function' ? await wlComputeAll() : null; }catch(e){ return null; } }); }catch(e){}
   // relevé du jour : températures, probabilités, sources en panne, valeur de ton stock
   const jour = await page.evaluate(() => {
     const o = { t:{}, pv:{}, fails:[], mv:null };
@@ -156,7 +157,7 @@ try{
     try{ o.xc = (window.__xcheck || []).filter(x => x && x.ok === false).map(x => x.name.replace(/\s*\(\d{2}\/\d{2}\/\d{4}\)/, '')); }catch(e){}
     // 09/10 (n°10) : bulletin du matin (5 lignes)
     try{ o.matin = typeof matinLines==='function' ? matinLines() : null; }catch(e){}
-    try{ if(typeof renderMyMetals==='function') renderMyMetals(); const h = JSON.parse(localStorage.getItem('mt_metals_value_history')||'[]'); const last = h[h.length-1]; if(last && last.date === new Date().toISOString().slice(0,10) && last.value > 0) o.mv = { value: Math.round(last.value*100)/100, cost: last.cost!=null ? Math.round(last.cost*100)/100 : null }; }catch(e){}
+    try{ if(typeof renderMyMetals==='function') renderMyMetals(); const h = JSON.parse(localStorage.getItem('mt_metals_value_history')||'[]'); const last = h[h.length-1]; if(last && last.date === (typeof parisDay==='function' ? parisDay() : new Date().toISOString().slice(0,10)) && last.value > 0) o.mv = { value: Math.round(last.value*100)/100, cost: last.cost!=null ? Math.round(last.cost*100)/100 : null }; }catch(e){}
     return o;
   });
   // 04/10 (n°10) : bulletin de notes de la Prévision (test honnête + vraies prévisions relevées par le robot)
@@ -239,10 +240,9 @@ try{
   const snap = { v: 1, at: Date.now(), ls: st.ls, idb: st.idb, vapid: vapid.publicKey };
   mkdirSync('out', { recursive: true });
   writeFileSync('out/data.enc', await chiffre(key, JSON.stringify(snap)));
-  if(aEnvoyer.length){
-    const r = await envoyer(aEnvoyer, vapid); say(`notifications : ${r.ok} envoyée(s), ${r.ko} en échec`);
-    if(r.morts.length){ const M = (H.subMorts && !Array.isArray(H.subMorts)) ? H.subMorts : {}; r.morts.forEach(e => { M[e] = Date.now(); }); H.subMorts = Object.fromEntries(Object.entries(M).slice(-50)); say(`${r.morts.length} abonnement(s) expiré(s) mis de côté`); }
-  }
+  // 17/10 : les notifications sont seulement PRÉPARÉES ici (fichier chiffré envoi.enc, hors du site) ; elles partent
+  // dans l'étape suivante du workflow (envoyer.mjs), une fois l'état réellement enregistré sur la branche site.
+  if(aEnvoyer.length){ writeFileSync('envoi.enc', await chiffre(key, JSON.stringify(aEnvoyer))); say(`notifications préparées : ${aEnvoyer.length}`); }
   writeFileSync('out/historique.enc', await chiffre(key, JSON.stringify(H)));
   copyFileSync('app.enc', 'out/app.enc'); copyFileSync('index.html', 'out/index.html'); copyFileSync('sel.json', 'out/sel.json');
   if(existsSync('static')) for(const f of readdirSync('static')) copyFileSync('static/'+f, 'out/'+f); // icônes, manifeste, service worker

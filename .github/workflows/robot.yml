@@ -1,4 +1,6 @@
 name: robot
+# 17/10 : les lancements de cron-job.org portent « source: cron » → titre à part, reconnu par le veilleur et Santé du Carnet
+run-name: ${{ inputs.source == 'cron' && 'robot (cron-job.org)' || 'robot' }}
 on:
   schedule:
     # 16/10 : demandé toutes les 15 min. GitHub saute la plupart des passages programmés (4 à 7 par jour
@@ -6,6 +8,11 @@ on:
     # relance le robot s'il n'est pas passé depuis 75 min, et un déclencheur extérieur (cron-job.org) peut le lancer.
     - cron: '8-59/15 * * * *'
   workflow_dispatch:
+    inputs:
+      source:
+        description: "Qui lance (cron = cron-job.org)"
+        required: false
+        default: ''
 permissions:
   contents: write
   actions: write   # pour lancer la publication du site (tâche « site », séparée)
@@ -22,11 +29,24 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false   # le jeton n'est pas laissé sur le disque (les envois le donnent eux-mêmes)
+      # 17/10 : « branche absente » (vrai premier passage) et « téléchargement raté » ne sont plus confondus.
+      # Avant, un simple raté réseau faisait repartir le robot de zéro et il écrasait tout l'historique.
       - name: État précédent
-        run: git fetch -q --depth=1 origin site && git worktree add -q site FETCH_HEAD || echo "premier passage"
+        run: |
+          rc=0; git ls-remote --exit-code --heads origin site >/dev/null || rc=$?
+          if [ $rc -eq 2 ]; then echo "premier passage"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "::error::dépôt injoignable : passage arrêté pour ne rien effacer"; exit 1; fi
+          for i in 1 2 3; do git fetch -q --depth=1 origin site && git worktree add -q site FETCH_HEAD && exit 0; sleep $((i*10)); done
+          echo "::error::état précédent impossible à télécharger : passage arrêté pour ne rien effacer"; exit 1
       - name: Fichiers chiffrés de la branche coffre
         run: |
-          git fetch -q --depth=1 origin coffre || exit 0
+          rc=0; git ls-remote --exit-code --heads origin coffre >/dev/null || rc=$?
+          if [ $rc -eq 2 ]; then echo "pas encore de coffre"; exit 0; fi
+          if [ $rc -ne 0 ]; then echo "::error::dépôt injoignable : passage arrêté"; exit 1; fi
+          ok=0; for i in 1 2 3; do git fetch -q --depth=1 origin coffre && ok=1 && break; sleep $((i*10)); done
+          if [ $ok -ne 1 ]; then echo "::error::coffre impossible à télécharger : passage arrêté"; exit 1; fi
           git show FETCH_HEAD:coffre.enc > coffre.enc 2>/dev/null || rm -f coffre.enc
           git show FETCH_HEAD:abonnements.enc > abonnements.enc 2>/dev/null || rm -f abonnements.enc
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -46,14 +66,32 @@ jobs:
           git add -A
           git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -qm maj
           git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site
+      # 17/10 : les notifications partent seulement maintenant, une fois l'état enregistré
+      - name: Notifications
+        if: hashFiles('envoi.enc') != ''
+        continue-on-error: true
+        run: |
+          node envoyer.mjs
+          if [ -f morts.flag ]; then cd out && git add -A && git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -qm maj && git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site; fi
+        env:
+          MOT_DE_PASSE: ${{ secrets.MOT_DE_PASSE }}
       - name: Sauvegarde hebdomadaire chiffrée (branche sauvegardes, 8 dernières semaines)
         if: hashFiles('out/historique.enc') != ''
         run: |
           W=$(date -u +%G-S%V)
+          U="https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
           mkdir -p sv && cd sv && git init -q -b sauvegardes
-          if git fetch -q --depth=1 "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" sauvegardes 2>/dev/null; then git checkout -q FETCH_HEAD -- . ; fi
+          # 17/10 : si les anciennes sauvegardes existent mais ne se téléchargent pas, on n'écrase rien (sauvegarde reportée)
+          rc=0; git ls-remote --exit-code --heads "$U" sauvegardes >/dev/null || rc=$?
+          if [ $rc -eq 0 ]; then
+            ok=0; for i in 1 2 3; do git fetch -q --depth=1 "$U" sauvegardes && ok=1 && break; sleep $((i*10)); done
+            if [ $ok -ne 1 ]; then echo "::warning::anciennes sauvegardes illisibles : sauvegarde reportée, rien n'est effacé"; exit 0; fi
+            git checkout -q FETCH_HEAD -- .
+          elif [ $rc -ne 2 ]; then echo "::warning::dépôt injoignable : sauvegarde reportée"; exit 0; fi
           if [ -f "$W.enc" ]; then echo "sauvegarde de la semaine déjà faite"; exit 0; fi
-          node -e 'const fs=require("fs");const r=f=>fs.existsSync(f)?fs.readFileSync(f,"utf8"):null;fs.writeFileSync(process.argv[1],JSON.stringify({v:1,at:Date.now(),coffre:r("../coffre.enc"),hist:r("../out/historique.enc")}))' "$W.enc"
+          if [ ! -s ../coffre.enc ] || [ ! -s ../out/historique.enc ] || [ ! -s ../out/data.enc ]; then echo "::warning::sauvegarde incomplète évitée (une partie manque ce passage-ci)"; exit 0; fi
+          # tout ce qu'il faut pour tout remettre : tes données (coffre), l'historique, l'état du robot et les abonnements
+          node -e 'const fs=require("fs");const r=f=>fs.existsSync(f)?fs.readFileSync(f,"utf8"):null;fs.writeFileSync(process.argv[1],JSON.stringify({v:2,at:Date.now(),coffre:r("../coffre.enc"),hist:r("../out/historique.enc"),data:r("../out/data.enc"),abos:r("../abonnements.enc")}))' "$W.enc"
           ls *.enc | sort | head -n -8 | xargs -r rm -f
           git add -A
           git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -qm sauvegarde

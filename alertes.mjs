@@ -27,6 +27,7 @@ function zoneWithMargin(t, prevZ){
   const limit = z > prevZ ? (z === 2 ? 66 : 33) : (z === 1 ? 66 : 33);
   return Math.abs(t - limit) >= 3 ? z : prevZ;
 }
+const parisDate = t => new Date(t).toLocaleString('sv-SE', { timeZone:'Europe/Paris' }).slice(0, 10);
 function parisNow(){ const s = new Date().toLocaleString('sv-SE', { timeZone:'Europe/Paris' }); return { date: s.slice(0, 10), hour: +s.slice(11, 13), day: new Date(s.replace(' ', 'T')).getDay() }; }
 
 // st = { t:{traditional,…}, pv:{ id:{ label, b, u, sb, su, nb, nu, baseB, baseU, relB, relU, phase, dd } }, fails:[noms], mv:{value,cost}|null }
@@ -98,23 +99,25 @@ export function alertes(H, st, subs){
     Object.entries(st.raw || {}).forEach(([k, R]) => Object.entries(R || {}).forEach(([n, x]) => {
       const s = days.map(d => H.days[d].raw[k] ? H.days[d].raw[k][n] : null).filter(v => v != null && isFinite(v)); if(s.length < 20) return;
       let mx = 0; for(let i = 1; i < s.length; i++) mx = Math.max(mx, Math.abs(s[i] - s[i-1])); const last = s[s.length-1], j = Math.abs(x - last);
-      if(mx > 0 && j > 3*mx && j > 0.02*Math.abs(last)){ const id = k + '|' + n; if(!A.susp[id] || A.susp[id] < new Date(Date.now() - 7*86400000).toISOString().slice(0, 10)){ A.susp[id] = now.date; msgs.susp.push(n); } }
+      if(mx > 0 && j > 3*mx && j > 0.02*Math.abs(last)){ const id = k + '|' + n; if(!A.susp[id] || A.susp[id] < parisDate(Date.now() - 7*86400000)){ A.susp[id] = now.date; msgs.susp.push(n); } }
     })); }catch(e){}
   // 3 sexies (09/10, n°10). liste de suivi : alerte quand un élément PASSE sous ton seuil (pas à chaque passage)
-  A.wl = A.wl || {}; const vusWl = new Set();
-  (st.wl || []).forEach(x => { vusWl.add(x.s); const on = (x.al || []).length > 0; if(on && !A.wl[x.s]) msgs.wl.push(`${x.n} : ${x.al.join(' ; ')}`); A.wl[x.s] = on; });
-  Object.keys(A.wl).forEach(s => { if(!vusWl.has(s)) delete A.wl[s]; });
+  // 17/10 : st.wl absent = mesure impossible ce passage-ci → on ne touche pas à la mémoire (sinon tout repartirait en double)
+  A.wl = A.wl || {};
+  if(Array.isArray(st.wl)){ const vusWl = new Set();
+    st.wl.forEach(x => { vusWl.add(x.s); const on = (x.al || []).length > 0; if(on && !A.wl[x.s]) msgs.wl.push(`${x.n} : ${x.al.join(' ; ')}`); A.wl[x.s] = on; });
+    Object.keys(A.wl).forEach(s => { if(!vusWl.has(s)) delete A.wl[s]; }); }
   // 3 octies (16/10). sites dont la présentation a changé : prévenu une fois par page (et quand elle revient)
   A.fmt = A.fmt || {}; msgs.format = [];
-  const fNow = new Set(st.fmt || []);
-  fNow.forEach(k => { if(!A.fmt[k]){ A.fmt[k] = now.date; msgs.format.push(k); } });
-  Object.keys(A.fmt).forEach(k => { if(!fNow.has(k)) delete A.fmt[k]; });
+  if(Array.isArray(st.fmt)){ const fNow = new Set(st.fmt);
+    fNow.forEach(k => { if(!A.fmt[k]){ A.fmt[k] = now.date; msgs.format.push(k); } });
+    Object.keys(A.fmt).forEach(k => { if(!fNow.has(k)) delete A.fmt[k]; }); }
   // 3 septies (09/10, n°12). nouveaux liens de vérification cassés
   if((st.liensNouv || []).length) msgs.liens.push(st.liensNouv.join(', '));
   // 4. résumé du dimanche matin (une fois par semaine)
   if(now.day === 0 && now.hour >= 9 && A.weekly !== now.date){
     A.weekly = now.date;
-    const d7 = Object.keys(H.days || {}).filter(d => d <= new Date(Date.now() - 6.5*86400000).toISOString().slice(0, 10)).sort().pop();
+    const d7 = Object.keys(H.days || {}).filter(d => d <= parisDate(Date.now() - 6.5*86400000)).sort().pop();
     const old = d7 ? H.days[d7] : null;
     const lines = Object.entries(st.t || {}).filter(([, t]) => t != null).map(([k, t]) => { const o = old?.t?.[k]; const d = o != null ? Math.round(t - o) : null; return `${LAB[k] || k} ${Math.round(t)}${d != null ? (d === 0 ? ' (=)' : ` (${d > 0 ? '+' : ''}${d})`) : ''}`; });
     const pvl = Object.values(st.pv || {}).filter(x => x.relB).map(x => `${x.label} : baisse ${x.b} %, hausse ${x.u} %`);
@@ -160,7 +163,7 @@ export function alertes(H, st, subs){
   }
   // 16/10 : pastille de l'icône = lignes de la liste de suivi dont le seuil est atteint
   const badge = (st.wl || []).filter(x => (x.al || []).length || x.v === 'bon').length; out.forEach(o => { o.badge = badge; });
-  A.seen = (subs || []).map(s => s && s.id).filter(Boolean);
+  if((subs || []).length) A.seen = subs.map(s => s && s.id).filter(Boolean); // 17/10 : abonnements illisibles ce passage-ci → mémoire gardée
   return { out, counts: Object.fromEntries(Object.entries(msgs).map(([k, v]) => [k, v.length])) };
 }
 

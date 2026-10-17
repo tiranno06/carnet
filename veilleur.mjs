@@ -16,8 +16,9 @@ const now = Date.now(), H = 3600000;
 const SEUIL = 12; // heures. GitHub saute souvent des passages programmés : 3 à 9 h sans passage arrive normalement.
 
 // ---- état mémorisé (branche « veilleur », fichier etat.json : seulement des dates) ----
-let etat = {}, etatSha = null;
-try{ const f = await json('contents/etat.json?ref=veilleur'); etatSha = f.sha; etat = JSON.parse(Buffer.from(f.content, 'base64').toString('utf8')); }catch(e){}
+let etat = {}, etatSha = null, etatIllisible = false;
+// 17/10 : état présent mais illisible (raté réseau) → pas de notification ni d'écriture ce passage-ci (sinon doublons)
+try{ const f = await json('contents/etat.json?ref=veilleur'); etatSha = f.sha; etat = JSON.parse(Buffer.from(f.content, 'base64').toString('utf8')); }catch(e){ if(!/→ 404$/.test(e.message)){ etatIllisible = true; say('état du veilleur illisible : pas de notification ce passage-ci'); } }
 async function sauver(){
   const body = { message: 'veilleur', branch: 'veilleur', content: Buffer.from(JSON.stringify(etat)).toString('base64'), ...(etatSha ? { sha: etatSha } : {}) };
   let r = await api('contents/etat.json', { method: 'PUT', body: JSON.stringify(body) });
@@ -80,6 +81,7 @@ if(vu){
     msg = { title: '✅ Carnet : le robot est reparti', body: `Les données sont de nouveau à jour${duree > 0 ? ` (interruption d'environ ${duree} h)` : ''}.`, tag: 'carnet-veilleur' };
     etat = {}; modif = true;
   }
+  if(msg && etatIllisible) msg = null;
   if(msg){
     if(!MOT_DE_PASSE || !existsSync('abonnements.enc')) say("pas d'appareil abonné aux notifications");
     else try{
@@ -106,7 +108,9 @@ try{
 // Plus aucun lancement par ton jeton depuis 2 h → le jeton a sans doute expiré ou été refusé : on te prévient.
 try{
   const runs = (await json('actions/workflows/robot.yml/runs?event=workflow_dispatch&per_page=30')).workflow_runs || [];
-  const der = runs.find(r => r.triggering_actor && !/\[bot\]$/.test(r.triggering_actor.login));
+  // 17/10 : lancements de cron-job.org reconnus à leur titre (l'appli et la publication lancent aussi le robot avec ton compte)
+  const tagues = runs.filter(r => r.display_title === 'robot (cron-job.org)');
+  const der = tagues.length ? tagues[0] : runs.find(r => r.triggering_actor && !/\[bot\]$/.test(r.triggering_actor.login));
   const ageH = der ? (now - Date.parse(der.created_at)) / H : 99;
   let msg = null;
   if(ageH > 2 && (!etat.cron || now - etat.cron >= 24*H)){
@@ -116,7 +120,7 @@ try{
     msg = { title: '✅ Carnet : le lancement automatique du robot remarche', body: 'Le déclencheur cron-job.org lance de nouveau le robot.', tag: 'carnet-cron' };
     delete etat.cron; modif = true;
   }
-  if(msg && MOT_DE_PASSE && existsSync('abonnements.enc')){
+  if(msg && !etatIllisible && MOT_DE_PASSE && existsSync('abonnements.enc')){
     const key = await cle(MOT_DE_PASSE, JSON.parse(readFileSync('sel.json', 'utf8')));
     const subs = JSON.parse(await dechiffre(key, readFileSync('abonnements.enc', 'utf8'))).subs || [];
     const r = await envoyer(subs.filter(s => s && s.endpoint && s.keys && (!s.prefs || s.prefs.pannes !== false)).map(s => ({ s, ...msg, url: './' })), vapidKeys(MOT_DE_PASSE));
@@ -124,4 +128,4 @@ try{
   }
 }catch(e){ say('contrôle du déclencheur extérieur impossible'); }
 
-if(modif) await sauver();
+if(modif && !etatIllisible) await sauver();
