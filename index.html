@@ -53,7 +53,9 @@ var GMS = (function(){
   var unb64 = function(t){ return Uint8Array.from(atob(t), function(c){ return c.charCodeAt(0); }); };
   function gunzip(bytes){ return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer().then(function(b){ return new TextDecoder().decode(b); }); }
   // « no-cache » : le navigateur redemande au site si le fichier a changé (réponse vide s'il n'a pas changé)
-  function getText(name){ return fetch(name, { cache:'no-cache' }).then(function(r){ if(!r.ok) throw new Error(name + ' ' + r.status); return r.text(); }); }
+  // 17/10 : accès invité (second mot de passe) → fichiers préparés pour l'invité par le robot
+  var INVITE = { 'app.enc':'invite-app.enc', 'data.enc':'invite-data.enc', 'historique.enc':'invite-hist.enc' };
+  function getText(name){ if(window.__gmsInvite && INVITE[name]) name = INVITE[name]; return fetch(name, { cache:'no-cache' }).then(function(r){ if(!r.ok) throw new Error(name + ' ' + r.status); return r.text(); }); }
   function dec(key, txt){ var f = JSON.parse(txt); return crypto.subtle.decrypt({ name:'AES-GCM', iv:unb64(f.iv) }, key, unb64(f.ct)).then(function(pt){ return gunzip(new Uint8Array(pt)); }); }
   function importRaw(t){ return crypto.subtle.importKey('raw', unb64(t), { name:'AES-GCM' }, true, ['encrypt','decrypt']); }
   function store(name, mode, fn){
@@ -84,6 +86,9 @@ var GMS = (function(){
         }catch(e){}
       });
       localStorage.setItem('mt_robot_at', String(snap.at || 0));
+      // accès invité : ce que le propriétaire a choisi de montrer (lecture seule) et les réglages d'affichage
+      if(snap.perso) Object.keys(snap.perso).forEach(function(k){ if(/^mt_/.test(k)) localStorage.setItem(k, snap.perso[k]); });
+      if(snap.invite) localStorage.setItem('mt_invite_voir', JSON.stringify(snap.invite));
       if(snap.vapid) localStorage.setItem('mt_vapid_pub', snap.vapid);
     }catch(e){}
     var idb = snap.idb || {};
@@ -153,6 +158,7 @@ window.__gmsBgStart = function(firstDelay){
   function show(key, html, cur, robotAt, fromNet, beforeShow){
     return (beforeShow ? beforeShow() : Promise.resolve()).catch(function(){}).then(function(){
       window.__gmsKey = key; window.__gmsRobotAt = robotAt || 0; window.__gmsOffline = !fromNet; window.__gmsCur = cur;
+      try{ window.__gmsInvite ? localStorage.setItem('gms_invite', '1') : localStorage.removeItem('gms_invite'); }catch(e){}
       var start = '<script>addEventListener("load",function(){window.__gmsBgStart(' + (fromNet ? 10*60000 : 2500) + ')});<\/script>';
       var page = String(html).replace(/<head[^>]*>/i, function(m){ return m + HEAD_PWA + start; });
       document.open(); document.write(page); document.close();
@@ -181,8 +187,15 @@ window.__gmsBgStart = function(firstDelay){
       });
   }
   function open(key, beforeShow){
+    var inv = false; try{ inv = localStorage.getItem('gms_invite') === '1'; }catch(e){}
+    window.__gmsInvite = inv;
     return openLocal(key, beforeShow).catch(function(){ return false; }) // copie illisible (ex. mot de passe changé) : on passe par le site
-      .then(function(done){ return done ? true : openNet(key, beforeShow); });
+      .then(function(done){ return done ? true : openNet(key, beforeShow).catch(function(e){
+        // 17/10 : mot de passe qui n'ouvre pas ce fichier → on essaie l'autre accès (propriétaire / invité)
+        if(!e || e.name !== 'OperationError') throw e;
+        window.__gmsInvite = !inv;
+        return openNet(key, beforeShow).catch(function(){ window.__gmsInvite = inv; throw e; });
+      }); });
   }
   function showForm(err){
     $('wait').hidden = true; $('f').hidden = false; $('go').disabled = false;

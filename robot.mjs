@@ -252,6 +252,27 @@ try{
   // dans l'étape suivante du workflow (envoyer.mjs), une fois l'état réellement enregistré sur la branche site.
   if(aEnvoyer.length){ writeFileSync('envoi.enc', await chiffre(key, JSON.stringify(aEnvoyer))); say(`notifications préparées : ${aEnvoyer.length}`); }
   writeFileSync('out/historique.enc', await chiffre(key, JSON.stringify(H)));
+  // 17/10 : accès invité (second mot de passe choisi dans Réglages). Fichiers chiffrés avec le mot de passe invité, en lecture
+  // seule, sans tes clés d'accès aux sites, avec seulement ce que tu as choisi de montrer. Accès coupé = fichiers non écrits.
+  try{
+    const I = perso.mt_invite ? JSON.parse(perso.mt_invite) : null;
+    if(I && I.actif && typeof I.pw === 'string' && I.pw.length >= 8){
+      const sansCles = html.replace(/\(\/\*__CLES_API__\*\/\{[^)]*\}\)/, '(/*__CLES_API__*/{})');
+      if(sansCles === html && !html.includes('(/*__CLES_API__*/{})')){ say('accès invité : en attente de la prochaine publication de l\'appli'); }
+      else {
+        const kg = await cle(I.pw, JSON.parse(readFileSync('sel.json', 'utf8'))), voir = Object.assign({ metaux:false, plan:false, suivi:false }, I.voir || {});
+        const montre = k => /^mt_(temp_exclus|temp_util|ind_hidden)$/.test(k) || (voir.metaux && /^mt_(metals_(or|argent|cuivre)|metal_objectif_|metals_value_history)/.test(k))
+          || (voir.plan && /^mt_(dca_plan|fonds_euros|trad_rule)$/.test(k)) || (voir.suivi && k === 'mt_watchlist');
+        const persoG = Object.fromEntries(Object.entries(perso).filter(([k]) => montre(k)));
+        const HG = { v: 1, days: {}, bul: H.bul, bulHist: H.bulHist, sante: H.sante, liens: H.liens, ...(voir.plan ? { dca: H.dca, dcaLast: H.dcaLast, matin: H.matin } : {}) };
+        Object.entries(H.days || {}).forEach(([d, x]) => { if(!x) return; const { mv, ...reste } = x; HG.days[d] = voir.metaux && mv ? { ...reste, mv } : reste; });
+        writeFileSync('out/invite-app.enc', await chiffre(kg, sansCles));
+        writeFileSync('out/invite-data.enc', await chiffre(kg, JSON.stringify({ v: 1, at: snap.at, ls: snap.ls, idb: snap.idb, perso: persoG, invite: voir })));
+        writeFileSync('out/invite-hist.enc', await chiffre(kg, JSON.stringify(HG)));
+        say('accès invité : fichiers préparés');
+      }
+    }
+  }catch(e){ say('accès invité : préparation impossible'); }
   copyFileSync('app.enc', 'out/app.enc'); copyFileSync('index.html', 'out/index.html'); copyFileSync('sel.json', 'out/sel.json');
   if(existsSync('static')) for(const f of readdirSync('static')) copyFileSync('static/'+f, 'out/'+f); // icônes, manifeste, service worker
   writeFileSync('out/.nojekyll', '');
