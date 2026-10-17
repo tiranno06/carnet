@@ -128,6 +128,13 @@ export function alertes(H, st, subs){
   if(Array.isArray(st.retard)){ A.retard = A.retard || {}; const R = new Set(st.retard);
     R.forEach(n => { const e = A.retard[n] || (A.retard[n] = { d: Date.now() }); if(!e.dit && Date.now() - e.d > 24*3600000){ e.dit = 1; msgs.retard.push(n); } });
     Object.keys(A.retard).forEach(n => { if(!R.has(n)){ if(A.retard[n].dit) msgs.repare.push(n); delete A.retard[n]; } }); }
+  // 3 decies (17/10). désaccord entre le prix et les indicateurs : prévenu quand il apparaît (ou change de sens)
+  msgs.div = [];
+  if(st.div && typeof st.div === 'object'){ A.div = A.div || {}; const NOMS = { traditional:'📈 Actions', france:'🇫🇷 France', metals:'🥇 Or', crypto:'◈ Bitcoin' };
+    const pc = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1).replace('.', ',') + ' %';
+    Object.entries(st.div).forEach(([k, r]) => { if(!r) return; const s = r.sens || null;
+      if(s && s !== A.div[k]) msgs.div.push(`${NOMS[k] || k} : ${s === 'baisse' ? `le prix monte (${pc(r.evo)} en ${r.jours} j) mais ${r.pires.length} indicateurs sur ${r.n} se dégradent` : `le prix baisse (${pc(r.evo)} en ${r.jours} j) mais ${r.mieux.length} indicateurs sur ${r.n} s'améliorent`}`);
+      A.div[k] = s; }); }
   // 3 septies (09/10, n°12). nouveaux liens de vérification cassés
   if((st.liensNouv || []).length) msgs.liens.push(st.liensNouv.join(', '));
   // 4. résumé du dimanche matin (une fois par semaine)
@@ -165,6 +172,7 @@ export function alertes(H, st, subs){
     if(pr.zones && msgs.zones.length) parts.push(...msgs.zones);
     if(pr.prevision && msgs.prevision.length) parts.push(...msgs.prevision);
     if(parts.length) out.push({ s, title: parts.length === 1 ? 'Carnet : un changement' : `Carnet : ${parts.length} changements`, body: parts.join('\n'), url: msgs.prevision.length && pr.prevision ? './?vue=prevision' : './', tag:'carnet-alerte' });
+    if(pr.zones && msgs.div.length) out.push({ s, title:"🔀 Carnet : le prix et les indicateurs ne sont pas d'accord", body: msgs.div.join('\n') + '\nPas un signal d\'achat ou de vente : un moment pour ne rien décider sur un coup de tête.', url:'./', tag:'carnet-desaccord' });
     if(pr.hebdo && msgs.hebdo.length) out.push({ s, title:'📅 Carnet : résumé de la semaine', body: msgs.hebdo[0], url:'./', tag:'carnet-hebdo' });
     if(pr.hebdo && msgs.mois.length) out.push({ s, title:'🗓️ Carnet : que faire ce mois-ci ?', body: msgs.mois[0], url:'./', tag:'carnet-mois' });
     if(pr.hebdo && msgs.bulletin.length) out.push({ s, title:'📝 Carnet : bulletin de notes de la Prévision', body: msgs.bulletin[0], url:'./?vue=prevision', tag:'carnet-bulletin' });

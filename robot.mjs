@@ -170,6 +170,8 @@ try{
     jour.bul = await page.evaluate(days => { try{ const B = pvBulletin(null, { days }); const o = {}; Object.entries(B).forEach(([id, x]) => { o[id] = { l: x.label, b: x.test.bear ? x.test.bear.note : null, u: x.test.bull ? x.test.bull.note : null, lb: x.live.bear && x.live.bear.note!=null ? x.live.bear.note : null, lu: x.live.bull && x.live.bull.note!=null ? x.live.bull.note : null }; }); return o; }catch(e){ return null; } }, pvDays);
   }catch(e){}
   jour.wl = wl;
+  // 17/10 : désaccords entre le prix et les indicateurs (prix sur 3 mois chargés à la demande)
+  try{ jour.div = await page.evaluate(async () => { try{ await divCharger(); return divTous(); }catch(e){ return null; } }); }catch(e){}
   // 09/10 (n°12) : liens « Vérifier sur… » contrôlés une fois par semaine (4 à la fois, sans rafale)
   try{
     const L = await page.evaluate(() => { const o = {}; document.querySelectorAll('a[href^="http"]').forEach(a => { if(!/v[ée]rifier/i.test(a.textContent)) return; const c = a.closest('.card, .gauge-card, [class*=card]'); const k = c && c.querySelector('.k, h3, .title-row'); const n = ((k && k.textContent) || a.textContent).replace(/\s+/g,' ').trim().slice(0, 60); if(!o[a.href]) o[a.href] = n; }); return Object.entries(o).map(([u, n]) => ({ u, n: n.split('·')[0].trim() })); });
