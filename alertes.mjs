@@ -137,6 +137,13 @@ export function alertes(H, st, subs){
     Object.entries(st.div).forEach(([k, r]) => { if(!r) return; const s = r.sens || null;
       if(s && s !== A.div[k]) msgs.div.push(`${NOMS[k] || k} : ${s === 'baisse' ? `le prix monte (${pc(r.evo)} en ${r.jours} j) mais ${r.pires.length} indicateurs sur ${r.n} se dégradent` : `le prix baisse (${pc(r.evo)} en ${r.jours} j) mais ${r.mieux.length} indicateurs sur ${r.n} s'améliorent`}`);
       A.div[k] = s; }); }
+  // 3 terdecies (20/10). analyse pro : changement du feu de tendance (10 mois) d'une ligne suivie ; tes lignes tracées
+  // franchies ; retour dans un bloc d'ordres acheteur. Chaque événement n'est envoyé qu'une fois.
+  msgs.pro = [];
+  if(st.pro && typeof st.pro === 'object'){ A.proFeu = A.proFeu || {}; A.proEv = A.proEv || {};
+    Object.entries(st.pro.feu || {}).forEach(([s, x]) => { if(!x || !x.e) return; const av = A.proFeu[s]; if(av && av !== x.e) msgs.pro.push(`${x.nom} : feu de tendance ${x.e > 0 ? '🟢 repassé au vert (au-dessus de sa moyenne des 10 mois)' : '🔴 passé au rouge (sous sa moyenne des 10 mois)'}`); A.proFeu[s] = x.e; });
+    (st.pro.evts || []).forEach(e => { if(!e || !e.cle || A.proEv[e.cle]) return; A.proEv[e.cle] = Date.now(); msgs.pro.push(e.txt); });
+    Object.keys(A.proEv).forEach(k => { if(Date.now() - A.proEv[k] > 30*86400000) delete A.proEv[k]; }); }
   // 3 undecies (17/10). bonne affaire sur une pièce d'or : prévenu quand elle apparaît (à nouveau après 7 jours au plus tôt)
   msgs.affaires = [];
   if(Array.isArray(st.affaires)){ A.aff = A.aff || {}; const vus = new Set();
@@ -195,6 +202,7 @@ export function alertes(H, st, subs){
     if(pr.pannes && msgs.xc.length) out.push({ s, title:'🔎 Carnet : deux sources ne sont pas d\'accord', body: msgs.xc.join(', ') + ' — écart anormal depuis 3 passages du robot. Détail : Réglages › Diagnostic › contrôle croisé.', url:'./', tag:'carnet-xc' });
     if(pr.pannes && msgs.susp.length) out.push({ s, title:'⚠️ Carnet : valeur à vérifier', body: msgs.susp.slice(0, 5).join(', ') + ' — variation du jour bien plus forte que tout ce qui a été relevé. Erreur de source ou vrai événement ?', url:'./', tag:'carnet-susp' });
     if(pr.suivi && msgs.wl.length) out.push({ s, title: msgs.wl.length === 1 ? '👀 Carnet : ta liste de suivi' : `👀 Carnet : ${msgs.wl.length} alertes de ta liste de suivi`, body: msgs.wl.join('\n'), url:'./', tag:'carnet-suivi' });
+    if(pr.suivi && msgs.pro.length) out.push({ s, title: msgs.pro.length === 1 ? '📐 Carnet : analyse pro' : `📐 Carnet : ${msgs.pro.length} alertes de l'analyse pro`, body: msgs.pro.slice(0, 6).join('\n') + '\nÀ regarder dans l\'onglet 📐 Analyse pro : ce n\'est pas un ordre d\'achat ou de vente.', url: './?vue=pro', tag: 'carnet-pro' });
     if(pr.suivi && msgs.wlv.length) out.push({ s, title: msgs.wlv.length === 1 ? '👀 Carnet : un verdict de ta liste de suivi a changé' : `👀 Carnet : ${msgs.wlv.length} verdicts de ta liste de suivi ont changé`, body: msgs.wlv.join('\n') + '\nCe que disait le passé, pas une garantie.', url:'./', tag:'carnet-wlv' });
     if(pr.pannes && msgs.retard.length) out.push({ s, title:'🕰️ Carnet : donnée toujours en retard', body: msgs.retard.join(', ') + " — pas de nouvelle publication depuis bien plus longtemps que d'habitude, et aucune source de remplacement trouvée depuis 1 jour. Le Carnet continue de chercher ; demande « révision du tableau de bord » à Claude Code si ça dure.", url:'./', tag:'carnet-retard' });
     if(pr.pannes && msgs.repare.length) out.push({ s, title:'✅ Carnet : donnée de nouveau à jour', body: msgs.repare.join(', '), url:'./', tag:'carnet-retard' });
