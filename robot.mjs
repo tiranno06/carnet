@@ -6,7 +6,7 @@ import http from 'node:http';
 import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
-import { relevePieces } from './pieces.mjs';
+import { relevePieces, releveSitesUtilisateur } from './pieces.mjs';
 import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope } from './donnees-plus.mjs';
 
 const t0 = Date.now();
@@ -31,7 +31,7 @@ let prev = null;
 // 17/10 : un état présent mais illisible arrête le robot (avant, il repartait de zéro et écrasait tout l'historique)
 if(existsSync('site/data.enc')){ try{ prev = JSON.parse(await dechiffre(key, readFileSync('site/data.enc', 'utf8'))); }catch(e){ say('état précédent illisible : passage arrêté pour ne rien effacer'); process.exit(1); } }
 // tes données personnelles (stock de métaux…) : lues seulement pour calculer la valeur du jour, jamais recopiées en clair
-const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule|temp_exclus|temp_util)/; // 16/10 : + ta règle pour les actions, tes choix d'indicateurs comptés dans les températures
+const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule|temp_exclus|temp_util|pieces_choix|pieces_sites)/; // 16/10 : + ta règle pour les actions, tes choix d'indicateurs comptés dans les températures
 let perso = {};
 if(existsSync('coffre.enc')){ try{ perso = JSON.parse(await dechiffre(key, readFileSync('coffre.enc', 'utf8'))).data || {}; }catch(e){ say('coffre illisible : passage arrêté'); process.exit(1); } }
 let subs = [];
@@ -242,8 +242,27 @@ try{
   try{ const n = await page.evaluate(async () => { let n = 0; try{ getStaleDataList(); for(const p of Object.values(window.__fredReplBusy || {})){ try{ if(await Promise.race([p, new Promise(r => setTimeout(r, 60000))])) n++; }catch(e){} } }catch(e){} return n; }); if(n) say(`${n} série(s) retirée(s) remplacée(s) automatiquement`); }catch(e){}
   // 17/10 : prix des pièces d'or chez les marchands (toutes les 6 h), repris par la page (Mes Métaux)
   try{
+    // 20/10 : + les sites ajoutés par le propriétaire (lus avec le navigateur, 3 min au plus par passage) ; relevé refait
+    // tout de suite si la liste des pièces ou des sites a changé
     const avant = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_prix') || 'null'); }catch(e){ return null; } });
-    if(!avant || Date.now() - (avant.at || 0) > 6*3600000){ const P = await relevePieces(); if(P.ok){ await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P)); } say(`prix des pièces : ${P.ok} relevé(s), ${P.ko} manquant(s)`); }
+    const conf = await page.evaluate(() => { try{ return piecesConfigRobot(); }catch(e){ return null; } });
+    if(!avant || Date.now() - (avant.at || 0) > 6*3600000 || (conf && avant.sig !== conf.sig)){
+      const P = await relevePieces((conf && conf.off) || []), garde = new Set(((conf && conf.sites) || []).map(x => { try{ return new URL(x.url).hostname.replace(/^www\./, ''); }catch(e){ return ''; } }));
+      P.sites = Object.fromEntries(Object.entries((avant && avant.sites) || {}).filter(([h]) => garde.has(h)));
+      let nS = 0;
+      if(conf && conf.sites.length){
+        const R = await releveSitesUtilisateur(page.context(), conf, P.sites, 180000);
+        for(const [h, r] of Object.entries(R)){
+          const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
+          const ancien = P.sites[h] || {};
+          P.sites[h] = { nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : (r.err ? (ancien.offres || []) : []) };
+          nS++; say(`pièces — site personnel n°${nS} : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); // jamais le nom du site : le journal est public
+        }
+      }
+      P.sig = conf ? conf.sig : null;
+      if(P.ok || nS){ await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P)); }
+      say(`prix des pièces : ${P.ok} relevé(s) chez les marchands intégrés, ${P.ko} manquant(s), ${nS} site(s) personnel(s) lu(s)`);
+    }
   }catch(e){ say('prix des pièces : relevé impossible'); }
   // 17/10 : or des banques centrales (FMI) et des ETF (GLD) une fois par jour ; achats des dirigeants toutes les 6 h
   try{
@@ -288,7 +307,7 @@ try{
       if(sansCles === html && !html.includes('(/*__CLES_API__*/{})')){ say('accès invité : en attente de la prochaine publication de l\'appli'); }
       else {
         const kg = await cle(I.pw, JSON.parse(readFileSync('sel.json', 'utf8'))), voir = Object.assign({ metaux:false, plan:false, suivi:false }, I.voir || {});
-        const montre = k => /^mt_(temp_exclus|temp_util|ind_hidden)$/.test(k) || (voir.metaux && /^mt_(metals_(or|argent|cuivre)|metal_objectif_|metals_value_history)/.test(k))
+        const montre = k => /^mt_(temp_exclus|temp_util|ind_hidden)$/.test(k) || (voir.metaux && /^mt_(metals_(or|argent|cuivre)|metal_objectif_|metals_value_history|pieces_choix)/.test(k))
           || (voir.plan && /^mt_(dca_plan|fonds_euros|trad_rule)$/.test(k)) || (voir.suivi && k === 'mt_watchlist');
         const persoG = Object.fromEntries(Object.entries(perso).filter(([k]) => montre(k)));
         const HG = { v: 1, days: {}, bul: H.bul, bulHist: H.bulHist, sante: H.sante, liens: H.liens, ...(voir.plan ? { dca: H.dca, dcaLast: H.dcaLast, matin: H.matin } : {}), ...(voir.suivi ? { wlv: H.wlv } : {}) };
