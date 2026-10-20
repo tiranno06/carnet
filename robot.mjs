@@ -248,12 +248,23 @@ try{
     // tout de suite si la liste des pièces ou des sites a changé
     const avant = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_prix') || 'null'); }catch(e){ return null; } });
     const conf = await page.evaluate(() => { try{ return piecesConfigRobot(); }catch(e){ return null; } });
-    if(!avant || Date.now() - (avant.at || 0) > 6*3600000 || (conf && avant.sig !== conf.sig)){
+    const complet = !avant || Date.now() - (avant.at || 0) > 6*3600000 || (conf && avant.sig !== conf.sig);
+    // sites personnels en échec (hors sites qui bloquent les robots) : nouvel essai au bout d'1 h, sans tout relever
+    const aRefaire = !complet && conf ? conf.sites.filter(x => { let h = ''; try{ h = new URL(x.url).hostname.replace(/^www\./, ''); }catch(e){} const r = (avant.sites || {})[h]; return r && r.err && !/protégé/.test(r.err) && Date.now() - (r.at || 0) > 3600000; }) : [];
+    if(aRefaire.length){
+      const P = avant; P.sites = P.sites || {}; let nS = 0;
+      const R = await releveSitesUtilisateur(page.context(), { ...conf, sites: aRefaire }, P.sites, 120000);
+      for(const [h, r] of Object.entries(R)){ const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
+        P.sites[h] = { nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : ((P.sites[h] || {}).offres || []) }; nS++;
+        say(`pièces — nouvel essai d'un site personnel : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); }
+      await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P));
+    }
+    if(complet){
       const P = await relevePieces((conf && conf.off) || []), garde = new Set(((conf && conf.sites) || []).map(x => { try{ return new URL(x.url).hostname.replace(/^www\./, ''); }catch(e){ return ''; } }));
       P.sites = Object.fromEntries(Object.entries((avant && avant.sites) || {}).filter(([h]) => garde.has(h)));
       let nS = 0;
       if(conf && conf.sites.length){
-        const R = await releveSitesUtilisateur(page.context(), conf, P.sites, 180000);
+        const R = await releveSitesUtilisateur(page.context(), conf, P.sites, 240000);
         for(const [h, r] of Object.entries(R)){
           const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
           const ancien = P.sites[h] || {};

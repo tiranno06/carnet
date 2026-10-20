@@ -90,7 +90,9 @@ function extrairePage(){
 const PROTEGE = /just a moment|un instant|attention required|access denied|acc[eè]s refus|verifying|v[ée]rification de s[ée]curit[ée]|captcha|are you a robot|pardon our interruption|mesure de s[ée]curit[ée]|security measure/i;
 async function lirePage(ctx, url){
   const p = await ctx.newPage();
-  try{ await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }); await p.waitForTimeout(2500);
+  try{ await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }); await p.waitForTimeout(1500);
+    // la page peut mettre du temps à afficher ses prix (navigateur occupé) : on attend qu'un prix en euros apparaisse (8 s au plus)
+    try{ await p.waitForFunction(() => /\d[\d\s.\u00a0\u202f]*,\d\d\s*(€|EUR)/.test(document.body ? document.body.innerText : ''), null, { timeout: 8000 }); }catch(e){}
     try{ await p.evaluate(() => window.scrollTo(0, document.body.scrollHeight)); await p.waitForTimeout(1200); }catch(e){}
     let R = await p.evaluate(extrairePage);
     if(PROTEGE.test(R.titre) && !R.produits.length){ await p.waitForTimeout(8000); R = await p.evaluate(extrairePage); if(PROTEGE.test(R.titre) && !R.produits.length) throw new Error('site protégé contre les robots'); }
@@ -110,7 +112,7 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
       if(eb){
         // eBay refuse les recherches automatiques mais montre la boutique : on lit ses pages (enchères écartées)
         for(let pg = 1; pg <= 8; pg++){ if(Date.now() - ts > 90000) break;
-          const u = `https://www.ebay.fr/str/${encodeURIComponent(eb[1])}?_pgn=${pg}&_ipg=240&LH_BIN=1`;
+          const u = pg === 1 ? S.url : `https://www.ebay.fr/str/${encodeURIComponent(eb[1])}?_pgn=${pg}`; // page 1 : l'adresse normale (les options déclenchent la vérification anti-robot)
           let R; try{ R = await lirePage(ctx, u); }catch(e){ if(pg === 1) throw e; break; }
           const avant = produits.length; R.produits.filter(p => /\/itm\//.test(p.url)).forEach(p => produits.push({ ...p, url: p.url.split('?')[0] }));
           if(produits.length === avant) break;
