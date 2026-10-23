@@ -117,3 +117,47 @@ export async function releveEurope(){
   if(!o.ipc && !o.estr && !o.ciss && !o.immo) throw new Error('INSEE et BCE injoignables');
   return o;
 }
+
+// ---- 23/10 : nouvelles données (relevées une fois par jour, chacune de son côté ; prev = relevé précédent, pour garder l'historique accumulé) ----
+// taux à 1 an de la zone euro (BCE), confiance des ménages, climat des affaires, prix des logements anciens (INSEE), prix à la pompe
+// en France (bulletin pétrolier hebdomadaire de la Commission européenne), prix de l'or à Shanghai (SGE), or et argent dans les coffres
+// de Londres (LBMA), réseau Bitcoin (blockchain.info), dollars numériques (DefiLlama), taux de financement des paris sur le Bitcoin (OKX),
+// part du Bitcoin dans toute la crypto (CoinGecko, notée chaque jour)
+const insee = async id => { const t = await lire(`https://bdm.insee.fr/series/sdmx/data/SERIES_BDM/${id}?startPeriod=1990-01`), o = {};
+  for(const m of t.matchAll(/TIME_PERIOD="(\d{4}-(?:\d{2}|Q\d))" OBS_VALUE="([\d.\-]+)"/g)) o[m[1]] = +m[2]; if(Object.keys(o).length < 40) throw new Error('INSEE ' + id + ' : trop court'); return o; };
+const garder = (o, n) => Object.fromEntries(Object.entries(o).sort((a, b) => a[0] < b[0] ? -1 : 1).slice(-n));
+export function lireCarburants(buf){ // feuille « Prices with taxes » : colonnes FR_price_with_tax_euro95 et _diesel, en € pour 1 000 litres
+  const F = zipFichiers(buf), ss = [...(F['xl/sharedStrings.xml'] || '').matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => m[1].replace(/<[^>]+>/g, ''));
+  const x = F['xl/worksheets/sheet1.xml']; if(!x) throw new Error('bulletin pétrolier illisible');
+  let cE = null, cD = null; const out = [];
+  for(const [, ligne] of x.matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g)){
+    const cel = {}; for(const m of ligne.matchAll(/<c r="([A-Z]+)\d+"([^>]*)(?:\/>|>([\s\S]*?)<\/c>)/g)){ const v = ((m[3] || '').match(/<v>([^<]*)<\/v>/) || [])[1]; if(v != null) cel[m[1]] = /t="s"/.test(m[2]) ? ss[+v] : v; }
+    if(!cE){ for(const [c, v] of Object.entries(cel)){ if(v === 'FR_price_with_tax_euro95') cE = c; if(v === 'FR_price_with_tax_diesel') cD = c; } continue; }
+    const j = +cel.A, e = parseFloat(cel[cE]), d = parseFloat(cel[cD]); if(!(j > 30000 && j < 80000) || !(e > 300)) continue;
+    out.push([new Date(Date.UTC(1899, 11, 30) + j*86400000).toISOString().slice(0, 10), +(e/1000).toFixed(3), isFinite(d) ? +(d/1000).toFixed(3) : null]);
+  }
+  if(out.length < 200) throw new Error('prix à la pompe : historique trop court'); return out.sort((a, b) => a[0] < b[0] ? -1 : 1);
+}
+export async function releveNouveaux(prev){
+  const o = { ...(prev || {}) }, vieux = (k, h = 20) => !o[k] || !o[k].at || Date.now() - o[k].at > h*3600000, err = [];
+  const essai = async (k, f, h) => { if(!vieux(k, h)) return; try{ o[k] = { ...(await f(o[k])), at: Date.now() }; }catch(e){ err.push(k + ' : ' + e.message); } };
+  await essai('eu1a', async () => { const r = await bce('YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_1Y'); return { mois: moyMois(r), der: r[r.length - 1] }; });
+  await essai('insee', async () => ({ menages: await insee('001587668'), affaires: await insee('001565530'), logements: await insee('010567059') }));
+  await essai('carbu', async () => ({ sem: lireCarburants(await lire('https://energy.ec.europa.eu/document/download/906e60ca-8b6a-44e7-8589-652854d2fd3f_en?filename=Weekly_Oil_Bulletin_Prices_History_maticni_4web.xlsx', true)).slice(-1100) }), 70);
+  await essai('sge', async () => { const r = await fetch('https://en.sge.com.cn/graph/DayilyJzj', { method: 'POST', headers: { 'user-agent': UA, 'content-type': 'application/x-www-form-urlencoded' }, body: 'start=&end=', signal: AbortSignal.timeout(60000) });
+    if(!r.ok) throw new Error('SGE ' + r.status); const d = await r.json(), z = (d.zp || []).filter(x => x && x[1] > 0).map(x => [new Date(x[0] + 8*3600000).toISOString().slice(0, 10), x[1]]);
+    if(z.length < 500) throw new Error('SGE : historique trop court'); return { jours: z.slice(-2600) }; });
+  await essai('lbma', async p => { const t = (await lire('https://www.lbma.org.uk/prices-and-data/london-vault-data')).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+    const m = t.match(/As at end (\w+) (\d{4}), the amount of gold held in London vaults was ([\d,.]+) tonnes(?: \(a ([\d.]+)% (increase|decrease))?[\s\S]{0,300}?([\d,.]+) tonnes of silver(?: \(a ([\d.]+)% (increase|decrease))?/i); if(!m) throw new Error('LBMA : page changée');
+    const mo = { january:1, february:2, march:3, april:4, may:5, june:6, july:7, august:8, september:9, october:10, november:11, december:12 }[m[1].toLowerCase()]; if(!mo) throw new Error('LBMA : mois illisible');
+    const k = `${m[2]}-${String(mo).padStart(2, '0')}`, hist = { ...((p && p.hist) || {}) }; const pc = (v, sens) => v == null ? null : (sens === 'decrease' ? -1 : 1)*+v; hist[k] = { or: +m[3].replace(/,/g, ''), orPc: pc(m[4], m[5]), ag: +m[6].replace(/,/g, ''), agPc: pc(m[7], m[8]) }; return { hist: garder(hist, 240) }; });
+  await essai('btc', async () => { const ch = async n => { const d = JSON.parse(await lire(`https://api.blockchain.info/charts/${n}?timespan=3years&format=json&sampled=true`)); return (d.values || []).map(v => [new Date(v.x*1000).toISOString().slice(0, 10), +(+v.y).toPrecision(5)]); };
+    return { hash: await ch('hash-rate'), frais: await ch('transaction-fees-usd'), adr: await ch('n-unique-addresses') }; });
+  await essai('stable', async () => { const d = JSON.parse(await lire('https://stablecoins.llama.fi/stablecoincharts/all')), L = d.map(x => [new Date(+x.date*1000).toISOString().slice(0, 10), Math.round((x.totalCirculatingUSD && x.totalCirculatingUSD.peggedUSD) || 0)/1e6]).filter(x => x[1] > 0);
+    if(L.length < 365) throw new Error('DefiLlama : historique trop court'); const mois = {}; L.forEach(([d, v]) => { mois[d.slice(0, 7)] = Math.round(v); }); return { mois, jours: L.slice(-400).map(([d, v]) => [d, Math.round(v)]) }; });
+  await essai('fin', async () => { const d = JSON.parse(await lire('https://www.okx.com/api/v5/public/funding-rate-history?instId=BTC-USDT-SWAP&limit=100')), L = (d.data || []).map(x => [+x.fundingTime, +x.realizedRate || +x.fundingRate]).filter(x => isFinite(x[1])).sort((a, b) => a[0] - b[0]);
+    if(L.length < 20) throw new Error('OKX : trop peu de relevés'); return { pts: L.map(([t, r]) => [new Date(t).toISOString().slice(0, 16), +(r*100).toFixed(5)]) }; }, 6);
+  await essai('dom', async p => { const d = JSON.parse(await lire('https://api.coingecko.com/api/v3/global')).data, b = d && d.market_cap_percentage && d.market_cap_percentage.btc; if(!(b > 0)) throw new Error('CoinGecko : part du Bitcoin absente');
+    const hist = { ...((p && p.hist) || {}) }; hist[new Date().toISOString().slice(0, 10)] = +b.toFixed(2); return { hist: garder(hist, 1100), stable: d.market_cap_percentage.usdt != null ? +(d.market_cap_percentage.usdt + (d.market_cap_percentage.usdc || 0)).toFixed(2) : null }; }, 12);
+  return { o, err };
+}

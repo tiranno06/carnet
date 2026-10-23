@@ -149,6 +149,11 @@ export function alertes(H, st, subs){
   if(Array.isArray(st.affaires)){ A.aff = A.aff || {}; const vus = new Set();
     st.affaires.forEach(x => { if(!x || !x.id) return; vus.add(x.id); if(!A.aff[x.id] || Date.now() - A.aff[x.id] > 7*86400000){ A.aff[x.id] = Date.now(); msgs.affaires.push(`${x.nom} chez ${x.m} : prime ${String(x.prime.toFixed(1)).replace('.', ',')} % (d'habitude ${String(x.med.toFixed(1)).replace('.', ',')} %)`); } });
     Object.keys(A.aff).forEach(id => { if(!vus.has(id) && Date.now() - A.aff[id] > 7*86400000) delete A.aff[id]; }); }
+  // 3 terdecies (23/10). prix cible atteint sur une de tes pièces : prévenu une fois, puis à nouveau après 3 jours si c'est toujours le cas
+  msgs.cibles = [];
+  if(Array.isArray(st.cibles)){ A.cib = A.cib || {}; const vus = new Set();
+    st.cibles.forEach(x => { if(!x || !x.id) return; vus.add(x.id); if(!A.cib[x.id] || Date.now() - A.cib[x.id] > 3*86400000){ A.cib[x.id] = Date.now(); msgs.cibles.push(`${x.nom} chez ${x.m} : ${String(x.prix.toFixed(2)).replace('.', ',')} € (ton prix cible : ${String(x.cible.toFixed(2)).replace('.', ',')} €)`); } });
+    Object.keys(A.cib).forEach(id => { if(!vus.has(id)) delete A.cib[id]; }); }
   // 3 duodecies (17/10). fichiers du site différents de la publication : prévenu après 3 passages de suite (évite une fausse
   // alerte pendant les quelques minutes où une mise à jour du robot précède la nouvelle publication)
   msgs.integrite = [];
@@ -194,6 +199,7 @@ export function alertes(H, st, subs){
     if(parts.length) out.push({ s, title: parts.length === 1 ? 'Carnet : un changement' : `Carnet : ${parts.length} changements`, body: parts.join('\n'), url: msgs.prevision.length && pr.prevision ? './?vue=prevision' : './', tag:'carnet-alerte' });
     if(msgs.integrite.length) out.push({ s, title:'🛡️ Carnet : fichiers du site modifiés', body: 'Différents de la dernière publication : ' + msgs.integrite[0] + ". Si ce n'est pas une mise à jour de ta part ou de Claude, demande une vérification à Claude Code avant de saisir ton mot de passe.", url:'./', tag:'carnet-integrite' });
     if(pr.zones && msgs.affaires.length) out.push({ s, title:'🔥 Carnet : bonne affaire sur une pièce d\'or', body: msgs.affaires.join('\n') + '\nPrix affiché hors livraison ; vérifie sur le site avant d\'acheter.', url:'./?vue=mymetals', tag:'carnet-affaire' });
+    if(msgs.cibles.length) out.push({ s, title:'🔔 Carnet : prix cible atteint', body: msgs.cibles.join('\n') + '\nPrix affiché hors livraison ; vérifie sur le site avant d\'acheter.', url:'./?vue=mymetals', tag:'carnet-cible' });
     if(pr.zones && msgs.div.length) out.push({ s, title:"🔀 Carnet : le prix et les indicateurs ne sont pas d'accord", body: msgs.div.join('\n') + '\nPas un signal d\'achat ou de vente : un moment pour ne rien décider sur un coup de tête.', url:'./', tag:'carnet-desaccord' });
     if(pr.hebdo && msgs.hebdo.length) out.push({ s, title:'📅 Carnet : résumé de la semaine', body: msgs.hebdo[0], url:'./', tag:'carnet-hebdo' });
     if(pr.hebdo && msgs.mois.length) out.push({ s, title:'🗓️ Carnet : que faire ce mois-ci ?', body: msgs.mois[0], url:'./', tag:'carnet-mois' });

@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
 import { relevePieces, releveSitesUtilisateur } from './pieces.mjs';
-import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope } from './donnees-plus.mjs';
+import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux } from './donnees-plus.mjs';
 
 const t0 = Date.now();
 const say = m => console.log(`[${Math.round((Date.now()-t0)/1000)} s] ${m}`);
@@ -31,7 +31,7 @@ let prev = null;
 // 17/10 : un état présent mais illisible arrête le robot (avant, il repartait de zéro et écrasait tout l'historique)
 if(existsSync('site/data.enc')){ try{ prev = JSON.parse(await dechiffre(key, readFileSync('site/data.enc', 'utf8'))); }catch(e){ say('état précédent illisible : passage arrêté pour ne rien effacer'); process.exit(1); } }
 // tes données personnelles (stock de métaux…) : lues seulement pour calculer la valeur du jour, jamais recopiées en clair
-const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule|temp_exclus|temp_util|pieces_choix|pieces_sites|pro_dessins)/; // 16/10 : + ta règle pour les actions, tes choix d'indicateurs comptés dans les températures
+const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule|temp_exclus|temp_util|pieces_choix|pieces_sites|pieces_cibles|fisc_dates|pro_dessins)/; // 16/10 : + ta règle pour les actions, tes choix d'indicateurs comptés dans les températures
 let perso = {};
 if(existsSync('coffre.enc')){ try{ perso = JSON.parse(await dechiffre(key, readFileSync('coffre.enc', 'utf8'))).data || {}; }catch(e){ say('coffre illisible : passage arrêté'); process.exit(1); } }
 let subs = [];
@@ -197,6 +197,7 @@ try{
   jour.integrite = integrite;
   // 17/10 : pièces dont la prime est anormalement basse (d'après l'historique des relevés précédents)
   try{ jour.affaires = await page.evaluate(() => { try{ return piecesAffaires(); }catch(e){ return null; } }); }catch(e){}
+  try{ jour.cibles = await page.evaluate(() => { try{ return piecesCiblesAtteintes(); }catch(e){ return null; } }); }catch(e){} // 23/10 : tes prix cibles par pièce
   // 20/10 : analyse pro : feu de tendance des lignes suivies, tes lignes tracées franchies, retour dans un bloc d'ordres
   try{ jour.pro = await page.evaluate(async () => { try{ return await proAlertesRobot(); }catch(e){ return null; } }); }catch(e){}
   enregistrer(H, jour);
@@ -286,6 +287,8 @@ try{
     if(!O.etf || Date.now() - O.etf.at > 20*3600000){ try{ O.etf = await releveOrEtf(); neuf = true; }catch(e){ say('or des ETF : ' + e.message); } }
     if(!O.eu || Date.now() - O.eu.at > 20*3600000){ try{ O.eu = await releveEurope(); neuf = true; }catch(e){ say('Europe (INSEE, BCE) : ' + e.message); } }
     if(!O.def || Date.now() - O.def.at > 20*3600000){ try{ O.def = await releveDefaillances(); neuf = true; }catch(e){ say('défaillances d\'entreprises : ' + e.message); } }
+    // 23/10 : nouvelles données (taux, INSEE, carburants, or de Shanghai et de Londres, crypto), chacune une fois par jour
+    try{ const N = await releveNouveaux(O.nv); if(JSON.stringify(N.o) !== JSON.stringify(O.nv || {})){ O.nv = N.o; neuf = true; } if(N.err.length) say('nouvelles données : ' + N.err.join(' ; ')); }catch(e){ say('nouvelles données : relevé impossible'); }
     if(neuf) await ecrit('mt_or_plus', O);
     const I = await lit('mt_inities');
     if(!I || Date.now() - I.at > 6*3600000){
@@ -320,7 +323,7 @@ try{
       if(sansCles === html && !html.includes('(/*__CLES_API__*/{})')){ say('accès invité : en attente de la prochaine publication de l\'appli'); }
       else {
         const kg = await cle(I.pw, JSON.parse(readFileSync('sel.json', 'utf8'))), voir = Object.assign({ metaux:false, plan:false, suivi:false }, I.voir || {});
-        const montre = k => /^mt_(temp_exclus|temp_util|ind_hidden)$/.test(k) || (voir.metaux && /^mt_(metals_(or|argent|cuivre)|metal_objectif_|metals_value_history|pieces_choix)/.test(k))
+        const montre = k => /^mt_(temp_exclus|temp_util|ind_hidden)$/.test(k) || (voir.metaux && /^mt_(metals_(or|argent|cuivre)|metal_objectif_|metals_value_history|pieces_choix|pieces_cibles)/.test(k))
           || (voir.plan && /^mt_(dca_plan|fonds_euros|trad_rule)$/.test(k)) || (voir.suivi && /^mt_(watchlist|pro_dessins)$/.test(k));
         const persoG = Object.fromEntries(Object.entries(perso).filter(([k]) => montre(k)));
         const HG = { v: 1, days: {}, bul: H.bul, bulHist: H.bulHist, sante: H.sante, liens: H.liens, ...(voir.plan ? { dca: H.dca, dcaLast: H.dcaLast, matin: H.matin } : {}), ...(voir.suivi ? { wlv: H.wlv } : {}) };
