@@ -63,7 +63,8 @@ export function enregistrer(H, st){
 }
 
 const AVIS = { publication: ["🛠️ Carnet : une mise à jour n'a pas pu être publiée", "L'ancienne version reste en ligne et fonctionne. Claude est prévenu."],
-  audit: ["🩺 Carnet : la vérification de Claude a trouvé quelque chose", 'Ouvre Claude pour lire le bilan.'], action: ['💬 Carnet : Claude a besoin de ta réponse', 'Une tâche programmée attend ta décision : ouvre Claude.'] };
+  audit: ["🩺 Carnet : la vérification de Claude a trouvé quelque chose", 'Ouvre Claude pour lire le bilan.'], action: ['💬 Carnet : Claude a besoin de ta réponse', 'Une tâche programmée attend ta décision : ouvre Claude.'],
+  test: ['🔔 Carnet : test des avis de Claude réussi', 'Les avis de Claude arrivent bien sur cet appareil. Rien à faire.'] };
 export function alertes(H, st, subs){
   const A = H.alerts = H.alerts || {}; const now = parisNow();
   const msgs = { zones: [], prevision: [], hebdo: [], pannes: [], agenda: [], matin: [], xc: [], susp: [], wl: [], wlv: [], liens: [] };
