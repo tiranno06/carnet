@@ -62,6 +62,8 @@ export function enregistrer(H, st){
   return H;
 }
 
+const AVIS = { publication: ["🛠️ Carnet : une mise à jour n'a pas pu être publiée", "L'ancienne version reste en ligne et fonctionne. Claude est prévenu."],
+  audit: ["🩺 Carnet : la vérification de Claude a trouvé quelque chose", 'Ouvre Claude pour lire le bilan.'], action: ['💬 Carnet : Claude a besoin de ta réponse', 'Une tâche programmée attend ta décision : ouvre Claude.'] };
 export function alertes(H, st, subs){
   const A = H.alerts = H.alerts || {}; const now = parisNow();
   const msgs = { zones: [], prevision: [], hebdo: [], pannes: [], agenda: [], matin: [], xc: [], susp: [], wl: [], wlv: [], liens: [] };
@@ -183,6 +185,9 @@ export function alertes(H, st, subs){
     const lines = Object.values(st.bul).map(x => `${x.l} : baisse ${n(x.b)}, hausse ${n(x.u)}${x.lb!=null ? ` (vraies prévisions : ${n(x.lb)} / ${n(x.lu)})` : ''}`);
     msgs.bulletin.push('10/20 = pas mieux que la moyenne, 20/20 = parfait.\n' + lines.join('\n'));
   }
+  // 24/10 : avis de la publication (échec) ou de Claude (tâches programmées) : un seul envoi par avis, s'il a moins de 2 jours
+  msgs.avis = [];
+  if(st.avis && AVIS[st.avis.code] && st.avis.at > (A.avisVu || 0) && Date.now() - st.avis.at < 2*86400000){ A.avisVu = st.avis.at; msgs.avis.push(st.avis.code); }
   // préparation des notifications, par appareil et selon ses préférences
   A.seen = A.seen || [];
   const out = [];
@@ -199,6 +204,7 @@ export function alertes(H, st, subs){
     if(parts.length) out.push({ s, title: parts.length === 1 ? 'Carnet : un changement' : `Carnet : ${parts.length} changements`, body: parts.join('\n'), url: msgs.prevision.length && pr.prevision ? './?vue=prevision' : './', tag:'carnet-alerte' });
     if(msgs.integrite.length) out.push({ s, title:'🛡️ Carnet : fichiers du site modifiés', body: 'Différents de la dernière publication : ' + msgs.integrite[0] + ". Si ce n'est pas une mise à jour de ta part ou de Claude, demande une vérification à Claude Code avant de saisir ton mot de passe.", url:'./', tag:'carnet-integrite' });
     if(pr.zones && msgs.affaires.length) out.push({ s, title:'🔥 Carnet : bonne affaire sur une pièce d\'or', body: msgs.affaires.join('\n') + '\nPrix affiché hors livraison ; vérifie sur le site avant d\'acheter.', url:'./?vue=mymetals', tag:'carnet-affaire' });
+    msgs.avis.forEach(c => out.push({ s, title: AVIS[c][0], body: AVIS[c][1], url:'./', tag:'carnet-avis-' + c }));
     if(msgs.cibles.length) out.push({ s, title:'🔔 Carnet : prix cible atteint', body: msgs.cibles.join('\n') + '\nPrix affiché hors livraison ; vérifie sur le site avant d\'acheter.', url:'./?vue=mymetals', tag:'carnet-cible' });
     if(pr.zones && msgs.div.length) out.push({ s, title:"🔀 Carnet : le prix et les indicateurs ne sont pas d'accord", body: msgs.div.join('\n') + '\nPas un signal d\'achat ou de vente : un moment pour ne rien décider sur un coup de tête.', url:'./', tag:'carnet-desaccord' });
     if(pr.hebdo && msgs.hebdo.length) out.push({ s, title:'📅 Carnet : résumé de la semaine', body: msgs.hebdo[0], url:'./', tag:'carnet-hebdo' });

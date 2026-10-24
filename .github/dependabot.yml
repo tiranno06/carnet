@@ -1,0 +1,17 @@
+# 24/10 : propositions mensuelles de mises à jour (briques GitHub et bibliothèques du robot), regroupées, jamais appliquées seules.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      briques:
+        patterns: ['*']
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      bibliotheques:
+        patterns: ['*']

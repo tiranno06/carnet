@@ -36,6 +36,8 @@ let perso = {};
 if(existsSync('coffre.enc')){ try{ perso = JSON.parse(await dechiffre(key, readFileSync('coffre.enc', 'utf8'))).data || {}; }catch(e){ say('coffre illisible : passage arrêté'); process.exit(1); } }
 let subs = [];
 if(existsSync('abonnements.enc')){ try{ subs = JSON.parse(await dechiffre(key, readFileSync('abonnements.enc', 'utf8'))).subs || []; }catch(e){ say('abonnements illisibles'); } }
+// 24/10 : avis déposé (chiffré, branche coffre) par la publication quand elle échoue, ou par Claude (tâches programmées) : envoyé en notification
+let avis = null; if(existsSync('avis.enc')){ try{ avis = JSON.parse(await dechiffre(key, readFileSync('avis.enc', 'utf8'))); }catch(e){ say('avis illisible'); } }
 let H = { v:1, days:{}, alerts:{} };
 if(existsSync('site/historique.enc')){ try{ H = JSON.parse(await dechiffre(key, readFileSync('site/historique.enc', 'utf8'))); }catch(e){ say('historique illisible : passage arrêté pour ne rien effacer'); process.exit(1); } }
 const vapid = vapidKeys(MDP);
@@ -112,6 +114,63 @@ try{
   await page.waitForFunction(() => (window.__lastRefreshAllAt || 0) > 0, null, { timeout: 120000, polling: 1000 });
   await page.waitForFunction(() => typeof refreshing !== 'undefined' && !refreshing, null, { timeout: 360000, polling: 2000 });
   say('actualisation principale terminée');
+  // 24/10 : les relevés hors de la page (pièces, or des banques centrales et des ETF, dirigeants, données en plus) tournent
+  // pendant la visite des onglets et le calcul des prévisions, au lieu d'attendre la fin ; l'état n'est enregistré qu'une fois finis.
+  const releves = (async () => {
+  // 17/10 : prix des pièces d'or chez les marchands (toutes les 6 h), repris par la page (Mes Métaux)
+  try{
+    // 20/10 : + les sites ajoutés par le propriétaire (lus avec le navigateur, 3 min au plus par passage) ; relevé refait
+    // tout de suite si la liste des pièces ou des sites a changé
+    const avant = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_prix') || 'null'); }catch(e){ return null; } });
+    const conf = await page.evaluate(() => { try{ return piecesConfigRobot(); }catch(e){ return null; } });
+    const complet = !avant || Date.now() - (avant.at || 0) > 6*3600000 || (conf && avant.sig !== conf.sig);
+    // sites personnels en échec (hors sites qui bloquent les robots) : nouvel essai au bout d'1 h, sans tout relever
+    const aRefaire = !complet && conf ? conf.sites.filter(x => { let h = ''; try{ h = new URL(x.url).hostname.replace(/^www\./, ''); }catch(e){} const r = (avant.sites || {})[h]; return r && r.err && !/protégé/.test(r.err) && Date.now() - (r.at || 0) > 3600000; }) : [];
+    if(aRefaire.length){
+      const P = avant; P.sites = P.sites || {}; let nS = 0;
+      const R = await releveSitesUtilisateur(page.context(), { ...conf, sites: aRefaire }, P.sites, 120000);
+      for(const [h, r] of Object.entries(R)){ const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
+        P.sites[h] = { nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : ((P.sites[h] || {}).offres || []) }; nS++;
+        say(`pièces — nouvel essai d'un site personnel : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); }
+      await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P));
+    }
+    if(complet){
+      const P = await relevePieces((conf && conf.off) || []), garde = new Set(((conf && conf.sites) || []).map(x => { try{ return new URL(x.url).hostname.replace(/^www\./, ''); }catch(e){ return ''; } }));
+      P.sites = Object.fromEntries(Object.entries((avant && avant.sites) || {}).filter(([h]) => garde.has(h)));
+      let nS = 0;
+      if(conf && conf.sites.length){
+        const R = await releveSitesUtilisateur(page.context(), conf, P.sites, 240000);
+        for(const [h, r] of Object.entries(R)){
+          const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
+          const ancien = P.sites[h] || {};
+          P.sites[h] = { nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : (r.err ? (ancien.offres || []) : []) };
+          nS++; say(`pièces — site personnel n°${nS} : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); // jamais le nom du site : le journal est public
+        }
+      }
+      P.sig = conf ? conf.sig : null;
+      if(P.ok || nS){ await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P)); }
+      say(`prix des pièces : ${P.ok} relevé(s) chez les marchands intégrés, ${P.ko} manquant(s), ${nS} site(s) personnel(s) lu(s)`);
+    }
+  }catch(e){ say('prix des pièces : relevé impossible'); }
+  // 17/10 : or des banques centrales (FMI) et des ETF (GLD) une fois par jour ; achats des dirigeants toutes les 6 h
+  try{
+    const lit = k => page.evaluate(k => { try{ return JSON.parse(localStorage.getItem(k) || 'null'); }catch(e){ return null; } }, k);
+    const ecrit = (k, v) => page.evaluate(([k, v]) => localStorage.setItem(k, v), [k, JSON.stringify(v)]);
+    const O = (await lit('mt_or_plus')) || {}; let neuf = false;
+    if(!O.bc || Date.now() - O.bc.at > 20*3600000){ try{ O.bc = await releveOrBanques(); neuf = true; }catch(e){ say('or des banques centrales : ' + e.message); } }
+    if(!O.etf || Date.now() - O.etf.at > 20*3600000){ try{ O.etf = await releveOrEtf(); neuf = true; }catch(e){ say('or des ETF : ' + e.message); } }
+    if(!O.eu || Date.now() - O.eu.at > 20*3600000){ try{ O.eu = await releveEurope(); neuf = true; }catch(e){ say('Europe (INSEE, BCE) : ' + e.message); } }
+    if(!O.def || Date.now() - O.def.at > 20*3600000){ try{ O.def = await releveDefaillances(); neuf = true; }catch(e){ say('défaillances d\'entreprises : ' + e.message); } }
+    // 23/10 : nouvelles données (taux, INSEE, carburants, or de Shanghai et de Londres, crypto), chacune une fois par jour
+    try{ const N = await releveNouveaux(O.nv); if(JSON.stringify(N.o) !== JSON.stringify(O.nv || {})){ O.nv = N.o; neuf = true; } if(N.err.length) say('nouvelles données : ' + N.err.join(' ; ')); }catch(e){ say('nouvelles données : relevé impossible'); }
+    if(neuf) await ecrit('mt_or_plus', O);
+    const I = await lit('mt_inities');
+    if(!I || Date.now() - I.at > 6*3600000){
+      try{ await ecrit('mt_inities', await releveInitiesMarche(I)); }catch(e){ say('dirigeants (marché) : ' + e.message); }
+      try{ const syms = await page.evaluate(() => { try{ return wlLoad().map(x => x.s); }catch(e){ return []; } }); await ecrit('mt_wl_inities', await releveInitiesListe(syms)); }catch(e){ say('dirigeants (liste de suivi) : relevé impossible'); }
+    }
+  }catch(e){ say('or et dirigeants : relevé impossible'); }
+  })().catch(e => say('relevés : ' + String(e && e.message || e).slice(0, 80)));
   await page.evaluate(() => { try{ if(localStorage.getItem('mt_ultra_simple')==='1') applyUltraSimpleView(false); }catch(e){} }); // sinon switchTab ne fait rien
   for(const tab of ['crypto', 'cross', 'mymetals', 'france', 'traditional']){
     await page.evaluate(t => { try{ switchTab(t); }catch(e){} }, tab);
@@ -194,7 +253,7 @@ try{
       say(`liens de vérification : ${L.length} contrôlés, ${pb.filter(x => x.c==='casse').length} cassés, ${pb.filter(x => x.c!=='casse').length} refusent les robots ou ne répondent pas`);
     }
   }catch(e){ say('contrôle des liens impossible'); }
-  jour.integrite = integrite;
+  jour.integrite = integrite; jour.avis = avis;
   // 17/10 : pièces dont la prime est anormalement basse (d'après l'historique des relevés précédents)
   try{ jour.affaires = await page.evaluate(() => { try{ return piecesAffaires(); }catch(e){ return null; } }); }catch(e){}
   try{ jour.cibles = await page.evaluate(() => { try{ return piecesCiblesAtteintes(); }catch(e){ return null; } }); }catch(e){} // 23/10 : tes prix cibles par pièce
@@ -249,59 +308,7 @@ try{
   try{ const R = await page.evaluate(async () => { let n = 0, v = null; try{ v = await fredVeille(); }catch(e){} try{ getStaleDataList(); for(const p of Object.values(window.__fredReplBusy || {})){ try{ if(await Promise.race([p, new Promise(r => setTimeout(r, 60000))])) n++; }catch(e){} } }catch(e){} return { n, lus: v ? v.lus : 0, sus: v ? v.suspectes : [] }; });
     if(R.sus.length) say(`veille FRED : ${R.lus} fiche(s) relue(s), série(s) retirée(s) ou plus mise(s) à jour par la Fed : ${R.sus.join(', ')}`);
     if(R.n) say(`${R.n} série(s) retirée(s) remplacée(s) automatiquement`); }catch(e){}
-  // 17/10 : prix des pièces d'or chez les marchands (toutes les 6 h), repris par la page (Mes Métaux)
-  try{
-    // 20/10 : + les sites ajoutés par le propriétaire (lus avec le navigateur, 3 min au plus par passage) ; relevé refait
-    // tout de suite si la liste des pièces ou des sites a changé
-    const avant = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_prix') || 'null'); }catch(e){ return null; } });
-    const conf = await page.evaluate(() => { try{ return piecesConfigRobot(); }catch(e){ return null; } });
-    const complet = !avant || Date.now() - (avant.at || 0) > 6*3600000 || (conf && avant.sig !== conf.sig);
-    // sites personnels en échec (hors sites qui bloquent les robots) : nouvel essai au bout d'1 h, sans tout relever
-    const aRefaire = !complet && conf ? conf.sites.filter(x => { let h = ''; try{ h = new URL(x.url).hostname.replace(/^www\./, ''); }catch(e){} const r = (avant.sites || {})[h]; return r && r.err && !/protégé/.test(r.err) && Date.now() - (r.at || 0) > 3600000; }) : [];
-    if(aRefaire.length){
-      const P = avant; P.sites = P.sites || {}; let nS = 0;
-      const R = await releveSitesUtilisateur(page.context(), { ...conf, sites: aRefaire }, P.sites, 120000);
-      for(const [h, r] of Object.entries(R)){ const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
-        P.sites[h] = { nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : ((P.sites[h] || {}).offres || []) }; nS++;
-        say(`pièces — nouvel essai d'un site personnel : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); }
-      await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P));
-    }
-    if(complet){
-      const P = await relevePieces((conf && conf.off) || []), garde = new Set(((conf && conf.sites) || []).map(x => { try{ return new URL(x.url).hostname.replace(/^www\./, ''); }catch(e){ return ''; } }));
-      P.sites = Object.fromEntries(Object.entries((avant && avant.sites) || {}).filter(([h]) => garde.has(h)));
-      let nS = 0;
-      if(conf && conf.sites.length){
-        const R = await releveSitesUtilisateur(page.context(), conf, P.sites, 240000);
-        for(const [h, r] of Object.entries(R)){
-          const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
-          const ancien = P.sites[h] || {};
-          P.sites[h] = { nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : (r.err ? (ancien.offres || []) : []) };
-          nS++; say(`pièces — site personnel n°${nS} : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); // jamais le nom du site : le journal est public
-        }
-      }
-      P.sig = conf ? conf.sig : null;
-      if(P.ok || nS){ await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P)); }
-      say(`prix des pièces : ${P.ok} relevé(s) chez les marchands intégrés, ${P.ko} manquant(s), ${nS} site(s) personnel(s) lu(s)`);
-    }
-  }catch(e){ say('prix des pièces : relevé impossible'); }
-  // 17/10 : or des banques centrales (FMI) et des ETF (GLD) une fois par jour ; achats des dirigeants toutes les 6 h
-  try{
-    const lit = k => page.evaluate(k => { try{ return JSON.parse(localStorage.getItem(k) || 'null'); }catch(e){ return null; } }, k);
-    const ecrit = (k, v) => page.evaluate(([k, v]) => localStorage.setItem(k, v), [k, JSON.stringify(v)]);
-    const O = (await lit('mt_or_plus')) || {}; let neuf = false;
-    if(!O.bc || Date.now() - O.bc.at > 20*3600000){ try{ O.bc = await releveOrBanques(); neuf = true; }catch(e){ say('or des banques centrales : ' + e.message); } }
-    if(!O.etf || Date.now() - O.etf.at > 20*3600000){ try{ O.etf = await releveOrEtf(); neuf = true; }catch(e){ say('or des ETF : ' + e.message); } }
-    if(!O.eu || Date.now() - O.eu.at > 20*3600000){ try{ O.eu = await releveEurope(); neuf = true; }catch(e){ say('Europe (INSEE, BCE) : ' + e.message); } }
-    if(!O.def || Date.now() - O.def.at > 20*3600000){ try{ O.def = await releveDefaillances(); neuf = true; }catch(e){ say('défaillances d\'entreprises : ' + e.message); } }
-    // 23/10 : nouvelles données (taux, INSEE, carburants, or de Shanghai et de Londres, crypto), chacune une fois par jour
-    try{ const N = await releveNouveaux(O.nv); if(JSON.stringify(N.o) !== JSON.stringify(O.nv || {})){ O.nv = N.o; neuf = true; } if(N.err.length) say('nouvelles données : ' + N.err.join(' ; ')); }catch(e){ say('nouvelles données : relevé impossible'); }
-    if(neuf) await ecrit('mt_or_plus', O);
-    const I = await lit('mt_inities');
-    if(!I || Date.now() - I.at > 6*3600000){
-      try{ await ecrit('mt_inities', await releveInitiesMarche(I)); }catch(e){ say('dirigeants (marché) : ' + e.message); }
-      try{ const syms = await page.evaluate(() => { try{ return wlLoad().map(x => x.s); }catch(e){ return []; } }); await ecrit('mt_wl_inities', await releveInitiesListe(syms)); }catch(e){ say('dirigeants (liste de suivi) : relevé impossible'); }
-    }
-  }catch(e){ say('or et dirigeants : relevé impossible'); }
+  await releves; // 24/10 : relevés lancés en parallèle plus haut (pièces, or, dirigeants, données en plus)
   // 3) on récupère l'état (filtré) et on le chiffre
   const st = await page.evaluate(async reSrc => {
     const re = new RegExp(reSrc), ls = {};

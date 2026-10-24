@@ -49,6 +49,7 @@ jobs:
           if [ $ok -ne 1 ]; then echo "::error::coffre impossible à télécharger : passage arrêté"; exit 1; fi
           git show FETCH_HEAD:coffre.enc > coffre.enc 2>/dev/null || rm -f coffre.enc
           git show FETCH_HEAD:abonnements.enc > abonnements.enc 2>/dev/null || rm -f abonnements.enc
+          git show FETCH_HEAD:avis.enc > avis.enc 2>/dev/null || rm -f avis.enc
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
