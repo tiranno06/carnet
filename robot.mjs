@@ -242,7 +242,11 @@ try{
   }
   // 16/10 : séries anormalement anciennes → recherche automatique d'une remplaçante (au plus 1 fois/semaine par série ;
   // le résultat, gardé dans mt_fred_repl, est repris par la page) — ici les sites répondent sans passerelle
-  try{ const n = await page.evaluate(async () => { let n = 0; try{ getStaleDataList(); for(const p of Object.values(window.__fredReplBusy || {})){ try{ if(await Promise.race([p, new Promise(r => setTimeout(r, 60000))])) n++; }catch(e){} } }catch(e){} return n; }); if(n) say(`${n} série(s) retirée(s) remplacée(s) automatiquement`); }catch(e){}
+  // 24/10 : + veille active : fiches FRED relues (toutes les 3 h par série) ; une série retirée ou plus mise à jour par la Fed
+  // est recherchée tout de suite, sans attendre le seuil de retard
+  try{ const R = await page.evaluate(async () => { let n = 0, v = null; try{ v = await fredVeille(); }catch(e){} try{ getStaleDataList(); for(const p of Object.values(window.__fredReplBusy || {})){ try{ if(await Promise.race([p, new Promise(r => setTimeout(r, 60000))])) n++; }catch(e){} } }catch(e){} return { n, lus: v ? v.lus : 0, sus: v ? v.suspectes : [] }; });
+    if(R.sus.length) say(`veille FRED : ${R.lus} fiche(s) relue(s), série(s) retirée(s) ou plus mise(s) à jour par la Fed : ${R.sus.join(', ')}`);
+    if(R.n) say(`${R.n} série(s) retirée(s) remplacée(s) automatiquement`); }catch(e){}
   // 17/10 : prix des pièces d'or chez les marchands (toutes les 6 h), repris par la page (Mes Métaux)
   try{
     // 20/10 : + les sites ajoutés par le propriétaire (lus avec le navigateur, 3 min au plus par passage) ; relevé refait
