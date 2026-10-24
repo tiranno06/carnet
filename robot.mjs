@@ -16,7 +16,7 @@ if(!existsSync('app.enc')){ say("aucune application publiée pour l'instant : ri
 if(!MDP){ say('secret MOT_DE_PASSE pas encore configuré : rien à faire'); process.exit(0); }
 
 // mêmes familles de données que la page reprend (jamais de clé, jamais de donnée personnelle)
-const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|pieces_prix|pieces_hist|or_plus|inities|wl_inities|wl_projournal|wl_bpa|scan)/;
+const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|pieces_prix|pieces_hist|or_plus|inities|wl_inities|wl_projournal|wl_bpa|scan|secours)/;
 // 16/10 : les compteurs de quotas des services gratuits sont gardés d'un passage à l'autre (le robot passe bien plus souvent)
 
 const key = await cle(MDP, JSON.parse(readFileSync('sel.json', 'utf8')));
@@ -113,7 +113,7 @@ try{
   await page.goto(base + '/app', { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.waitForFunction(() => (window.__lastRefreshAllAt || 0) > 0, null, { timeout: 120000, polling: 1000 });
   await page.waitForFunction(() => typeof refreshing !== 'undefined' && !refreshing, null, { timeout: 360000, polling: 2000 });
-  say('actualisation principale terminée');
+  say('actualisation principale terminée'); const dureeAct = Math.round((Date.now() - t0)/1000); // 24/10 : temps de chaque étape, pour repérer un robot qui ralentit
   // 24/10 : les relevés hors de la page (pièces, or des banques centrales et des ETF, dirigeants, données en plus) tournent
   // pendant la visite des onglets et le calcul des prévisions, au lieu d'attendre la fin ; l'état n'est enregistré qu'une fois finis.
   const releves = (async () => {
@@ -180,7 +180,7 @@ try{
   // onglet Prévision : probabilités calculées ici pour que la page s'ouvre déjà avec
   await page.evaluate(() => { try{ if(typeof pvCompute==='function') pvCompute(false); }catch(e){} });
   await page.waitForFunction(() => !window.__pv || window.__pv.done, null, { timeout: 240000, polling: 2000 }).catch(() => say('prévision : pas finie à temps'));
-  say('prévision calculée');
+  say('prévision calculée'); const dureePv = Math.round((Date.now() - t0)/1000);
   // 16/10 : tests sur le passé recalculés ici une fois par semaine (le plus ancien d'abord, un seul par passage,
   // 3 min au plus) : les appareils les reçoivent tout prêts au lieu de les refaire eux-mêmes
   try{
@@ -254,6 +254,9 @@ try{
     }
   }catch(e){ say('contrôle des liens impossible'); }
   jour.integrite = integrite; jour.avis = avis;
+  // 24/10 : sources de secours (Stooq, Tiingo, relais) testées chaque semaine, chaque jour si l'une était en échec
+  try{ const S = await page.evaluate(async () => { try{ if(!secoursDu()) return { fait: false, R: secoursResume() }; await Promise.race([secoursTester(), new Promise(r => setTimeout(r, 90000))]); return { fait: true, R: secoursResume() }; }catch(e){ return null; } });
+    if(S && S.R){ jour.secours = S.R.alerte; if(S.fait) say(`sources de secours : ${S.R.ok}/${S.R.n} répondent`); } }catch(e){}
   // 17/10 : pièces dont la prime est anormalement basse (d'après l'historique des relevés précédents)
   try{ jour.affaires = await page.evaluate(() => { try{ return piecesAffaires(); }catch(e){ return null; } }); }catch(e){}
   try{ jour.cibles = await page.evaluate(() => { try{ return piecesCiblesAtteintes(); }catch(e){ return null; } }); }catch(e){} // 23/10 : tes prix cibles par pièce
@@ -262,6 +265,7 @@ try{
   // 24/10 : scanner de marchés et rotation (une fois par jour, une soixantaine de marchés publics, rien de personnel)
   if(Date.now() - t0 < 200000) try{ const r = await page.evaluate(async () => { try{ return await Promise.race([scanLancer(), new Promise(ok => setTimeout(() => ok({ err: 'trop long, repris au prochain passage' }), 180000))]); }catch(e){ return { err: e.message }; } }); if(r && !r.deja) say(`scanner de marchés : ${r.err ? r.err : `${r.ok} marchés lus, ${r.ko} manquants`}`); }catch(e){}
   enregistrer(H, jour);
+  await releves.catch(() => {}); jour.duree = { tot: Math.round((Date.now() - t0)/1000), act: dureeAct, pv: dureePv - dureeAct }; // 24/10 : relevés finis, la durée compte tout le passage
   const al = alertes(H, jour, subs);
   say(`relevé du jour enregistré (${Object.keys(H.days).length} jours) ; alertes : ${Object.entries(al.counts).map(([k, n]) => k + ' ' + n).join(', ')}`);
   // 16/10 : les notifications partent à la fin, une fois l'état enregistré (plus de doublons si le passage échoue avant)

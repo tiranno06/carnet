@@ -186,6 +186,28 @@ export function alertes(H, st, subs){
     const lines = Object.values(st.bul).map(x => `${x.l} : baisse ${n(x.b)}, hausse ${n(x.u)}${x.lb!=null ? ` (vraies prévisions : ${n(x.lb)} / ${n(x.lu)})` : ''}`);
     msgs.bulletin.push('10/20 = pas mieux que la moyenne, 20/20 = parfait.\n' + lines.join('\n'));
   }
+  // 24/10 : sources de secours en panne (testées chaque semaine par le robot) : prévenu quand la liste change, et quand tout revient
+  msgs.secours = []; msgs.secoursOk = [];
+  if(Array.isArray(st.secours)){ const sig = st.secours.slice().sort().join(', ');
+    if(sig && sig !== A.secours){ msgs.secours.push(sig); } else if(!sig && A.secours){ msgs.secoursOk.push(A.secours); }
+    A.secours = sig; }
+  // 24/10 : le robot ralentit ? (3 passages de suite deux fois plus longs que d'habitude, ou lente dérive sur un mois)
+  msgs.lent = [];
+  if(st.duree && st.duree.tot){
+    const L = (H.durees || []).slice(-60), med = (k, l = L) => { const v = l.map(x => x[k]).filter(x => x != null).sort((a, b) => a - b); return v.length ? v[v.length >> 1] : null; };
+    const m = L.length >= 12 ? med('tot') : null, mn = s => s >= 90 ? `${Math.round(s/60)} min` : `${s} s`;
+    A.lent = A.lent || { n: 0, dit: 0, ditT: 0 };
+    if(m && st.duree.tot > Math.max(2*m, m + 120)) A.lent.n++; else A.lent.n = 0;
+    if(A.lent.n >= 3 && Date.now() - (A.lent.dit || 0) > 24*3600000){ A.lent.dit = Date.now();
+      const rel = x => x.tot - (x.act || 0) - (x.pv || 0), cand = [['l\'actualisation des données', st.duree.act, med('act')], ['la visite des onglets et les prévisions', st.duree.pv, med('pv')], ['les relevés et l\'enregistrement', rel(st.duree), (() => { const v = L.map(rel).sort((a, b) => a - b); return v[v.length >> 1]; })()]].filter(c => c[1] != null && c[2] != null).sort((a, b) => (b[1] - b[2]) - (a[1] - a[2]));
+      msgs.lent.push(`passages de ${mn(st.duree.tot)} au lieu de ${mn(m)} d'habitude${cand[0] ? ` (surtout ${cand[0][0]} : ${mn(cand[0][1])} au lieu de ${mn(cand[0][2])})` : ''}`); }
+    L.push({ at: Date.now(), ...st.duree }); H.durees = L.slice(-60);
+    // lente dérive : médiane du jour, gardée 40 jours ; cette semaine contre il y a 3 à 4 semaines
+    const J = H.dureesJ = H.dureesJ || {}, auj = now.date; J[auj] = med('tot', H.durees.filter(x => x.at > Date.now() - 86400000));
+    Object.keys(J).sort().slice(0, -40).forEach(d => delete J[d]);
+    const jours = Object.keys(J).sort(), mJ = l => { const v = l.map(d => J[d]).filter(x => x != null).sort((a, b) => a - b); return v.length >= 4 ? v[v.length >> 1] : null; };
+    const recent = mJ(jours.slice(-7)), ancien = mJ(jours.filter(d => d < jours[Math.max(0, jours.length - 21)]).slice(-7));
+    if(recent && ancien && recent > 1.5*ancien && recent - ancien > 60 && Date.now() - (A.lent.ditT || 0) > 7*86400000){ A.lent.ditT = Date.now(); msgs.lent.push(`le robot ralentit petit à petit : ${mn(recent)} par passage cette semaine, contre ${mn(ancien)} il y a un mois`); } }
   // 24/10 : avis de la publication (échec) ou de Claude (tâches programmées) : un seul envoi par avis, s'il a moins de 2 jours
   msgs.avis = [];
   if(st.avis && AVIS[st.avis.code] && st.avis.at > (A.avisVu || 0) && Date.now() - st.avis.at < 2*86400000){ A.avisVu = st.avis.at; msgs.avis.push(st.avis.code); }
@@ -205,6 +227,9 @@ export function alertes(H, st, subs){
     if(parts.length) out.push({ s, title: parts.length === 1 ? 'Carnet : un changement' : `Carnet : ${parts.length} changements`, body: parts.join('\n'), url: msgs.prevision.length && pr.prevision ? './?vue=prevision' : './', tag:'carnet-alerte' });
     if(msgs.integrite.length) out.push({ s, title:'🛡️ Carnet : fichiers du site modifiés', body: 'Différents de la dernière publication : ' + msgs.integrite[0] + ". Si ce n'est pas une mise à jour de ta part ou de Claude, demande une vérification à Claude Code avant de saisir ton mot de passe.", url:'./', tag:'carnet-integrite' });
     if(pr.zones && msgs.affaires.length) out.push({ s, title:'🔥 Carnet : bonne affaire sur une pièce d\'or', body: msgs.affaires.join('\n') + '\nPrix affiché hors livraison ; vérifie sur le site avant d\'acheter.', url:'./?vue=mymetals', tag:'carnet-affaire' });
+    if(pr.pannes && msgs.secours.length) out.push({ s, title:'🧯 Carnet : une source de secours ne répond plus', body: msgs.secours[0] + ' — en échec à 2 tests de suite. Tant que la source principale marche, rien ne change ; si elle tombe aussi, ces données ne se mettraient plus à jour. Le robot reteste chaque jour.', url:'./', tag:'carnet-secours' });
+    if(pr.pannes && msgs.secoursOk.length) out.push({ s, title:'✅ Carnet : sources de secours de nouveau en état', body: msgs.secoursOk[0] + ' répond de nouveau.', url:'./', tag:'carnet-secours' });
+    if(pr.pannes && msgs.lent.length) out.push({ s, title:'⏱️ Carnet : le robot ralentit', body: msgs.lent.join('\n') + '. Rien n\'est cassé pour l\'instant ; Claude regardera lors de son audit.', url:'./', tag:'carnet-lent' });
     msgs.avis.forEach(c => out.push({ s, title: AVIS[c][0], body: AVIS[c][1], url:'./', tag:'carnet-avis-' + c }));
     if(msgs.cibles.length) out.push({ s, title:'🔔 Carnet : prix cible atteint', body: msgs.cibles.join('\n') + '\nPrix affiché hors livraison ; vérifie sur le site avant d\'acheter.', url:'./?vue=mymetals', tag:'carnet-cible' });
     if(pr.zones && msgs.div.length) out.push({ s, title:"🔀 Carnet : le prix et les indicateurs ne sont pas d'accord", body: msgs.div.join('\n') + '\nPas un signal d\'achat ou de vente : un moment pour ne rien décider sur un coup de tête.', url:'./', tag:'carnet-desaccord' });
