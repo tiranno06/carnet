@@ -16,7 +16,7 @@ if(!existsSync('app.enc')){ say("aucune application publiée pour l'instant : ri
 if(!MDP){ say('secret MOT_DE_PASSE pas encore configuré : rien à faire'); process.exit(0); }
 
 // mêmes familles de données que la page reprend (jamais de clé, jamais de donnée personnelle)
-const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|pieces_prix|pieces_hist|or_plus|inities|wl_inities|wl_projournal|wl_bpa)/;
+const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|pieces_prix|pieces_hist|or_plus|inities|wl_inities|wl_projournal|wl_bpa|scan)/;
 // 16/10 : les compteurs de quotas des services gratuits sont gardés d'un passage à l'autre (le robot passe bien plus souvent)
 
 const key = await cle(MDP, JSON.parse(readFileSync('sel.json', 'utf8')));
@@ -200,6 +200,8 @@ try{
   try{ jour.cibles = await page.evaluate(() => { try{ return piecesCiblesAtteintes(); }catch(e){ return null; } }); }catch(e){} // 23/10 : tes prix cibles par pièce
   // 20/10 : analyse pro : feu de tendance des lignes suivies, tes lignes tracées franchies, retour dans un bloc d'ordres
   try{ jour.pro = await page.evaluate(async () => { try{ return await proAlertesRobot(); }catch(e){ return null; } }); }catch(e){}
+  // 24/10 : scanner de marchés et rotation (une fois par jour, une soixantaine de marchés publics, rien de personnel)
+  if(Date.now() - t0 < 200000) try{ const r = await page.evaluate(async () => { try{ return await Promise.race([scanLancer(), new Promise(ok => setTimeout(() => ok({ err: 'trop long, repris au prochain passage' }), 180000))]); }catch(e){ return { err: e.message }; } }); if(r && !r.deja) say(`scanner de marchés : ${r.err ? r.err : `${r.ok} marchés lus, ${r.ko} manquants`}`); }catch(e){}
   enregistrer(H, jour);
   const al = alertes(H, jour, subs);
   say(`relevé du jour enregistré (${Object.keys(H.days).length} jours) ; alertes : ${Object.entries(al.counts).map(([k, n]) => k + ' ' + n).join(', ')}`);
