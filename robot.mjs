@@ -12,10 +12,6 @@ import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, 
 const t0 = Date.now();
 const say = m => console.log(`[${Math.round((Date.now()-t0)/1000)} s] ${m}`);
 const MDP = process.env.MOT_DE_PASSE;
-// 25/10 : répétition générale (ROBOT_ESSAI=1, lancée par la publication avec la NOUVELLE version, avant de la mettre en ligne) :
-// tout le passage est joué, sans les relevés extérieurs (pièces, marchands, scanner, secours, veille FRED, tests hebdomadaires),
-// et rien n'est déposé nulle part (la publication jette le dossier out/).
-const ESSAI = process.env.ROBOT_ESSAI === '1';
 if(!existsSync('app.enc')){ say("aucune application publiée pour l'instant : rien à faire"); process.exit(0); }
 if(!MDP){ say('secret MOT_DE_PASSE pas encore configuré : rien à faire'); process.exit(0); }
 
@@ -120,7 +116,7 @@ try{
   say('actualisation principale terminée'); const dureeAct = Math.round((Date.now() - t0)/1000); // 24/10 : temps de chaque étape, pour repérer un robot qui ralentit
   // 24/10 : les relevés hors de la page (pièces, or des banques centrales et des ETF, dirigeants, données en plus) tournent
   // pendant la visite des onglets et le calcul des prévisions, au lieu d'attendre la fin ; l'état n'est enregistré qu'une fois finis.
-  const releves = (async () => { if(ESSAI) return;
+  const releves = (async () => {
   // 17/10 : prix des pièces d'or chez les marchands (toutes les 6 h), repris par la page (Mes Métaux)
   try{
     // 20/10 : + les sites ajoutés par le propriétaire (lus avec le navigateur, 3 min au plus par passage) ; relevé refait
@@ -187,7 +183,7 @@ try{
   say('prévision calculée'); const dureePv = Math.round((Date.now() - t0)/1000);
   // 16/10 : tests sur le passé recalculés ici une fois par semaine (le plus ancien d'abord, un seul par passage,
   // 3 min au plus) : les appareils les reçoivent tout prêts au lieu de les refaire eux-mêmes
-  if(!ESSAI) try{
+  try{
     const bt = await page.evaluate(async () => {
       const L = [['backtest-trad-v4', 'runTemperatureBacktest'], ['backtest-crypto-v2', 'runCryptoBacktest'], ['backtest-gold-v3', 'runGoldBacktest'], ['backtest-guide-v4', 'runGuideBacktest']];
       const age = []; for(const [k, f] of L){ if(typeof window[f] !== 'function') continue; let c = null; try{ c = await idbGet('mt_dailycache_'+k); }catch(e){} const a = c ? Date.now() - c.ts : Infinity; if(a > 6*86400000) age.push([a, k, f]); }
@@ -241,7 +237,7 @@ try{
   // 17/10 : désaccords entre le prix et les indicateurs (prix sur 3 mois chargés à la demande)
   try{ jour.div = await page.evaluate(async () => { try{ await divCharger(); return divTous(); }catch(e){ return null; } }); }catch(e){}
   // 09/10 (n°12) : liens « Vérifier sur… » contrôlés une fois par semaine (4 à la fois, sans rafale)
-  if(!ESSAI) try{
+  try{
     const L = await page.evaluate(() => { const o = {}; document.querySelectorAll('a[href^="http"]').forEach(a => { if(!/v[ée]rifier/i.test(a.textContent)) return; const c = a.closest('.card, .gauge-card, [class*=card]'); const k = c && c.querySelector('.k, h3, .title-row'); const n = ((k && k.textContent) || a.textContent).replace(/\s+/g,' ').trim().slice(0, 60); if(!o[a.href]) o[a.href] = n; }); return Object.entries(o).map(([u, n]) => ({ u, n: n.split('·')[0].trim() })); });
     // une fois par semaine, ou tout de suite si un lien signalé cassé a été corrigé entre-temps
     if(!H.liens || Date.now() - H.liens.at > 6.5*86400000 || (H.liens.pb || []).some(x => x.c === 'casse' && !L.some(y => y.u === x.u))){
@@ -259,7 +255,7 @@ try{
   }catch(e){ say('contrôle des liens impossible'); }
   jour.integrite = integrite; jour.avis = avis;
   // 24/10 : sources de secours (Stooq, Tiingo, relais) testées chaque semaine, chaque jour si l'une était en échec
-  if(!ESSAI) try{ const S = await page.evaluate(async () => { try{ if(!secoursDu()) return { fait: false, R: secoursResume() }; await Promise.race([secoursTester(), new Promise(r => setTimeout(r, 90000))]); return { fait: true, R: secoursResume() }; }catch(e){ return null; } });
+  try{ const S = await page.evaluate(async () => { try{ if(!secoursDu()) return { fait: false, R: secoursResume() }; await Promise.race([secoursTester(), new Promise(r => setTimeout(r, 90000))]); return { fait: true, R: secoursResume() }; }catch(e){ return null; } });
     if(S && S.R){ jour.secours = S.R.alerte; if(S.fait) say(`sources de secours : ${S.R.ok}/${S.R.n} répondent`); } }catch(e){}
   // 17/10 : pièces dont la prime est anormalement basse (d'après l'historique des relevés précédents)
   try{ jour.affaires = await page.evaluate(() => { try{ return piecesAffaires(); }catch(e){ return null; } }); }catch(e){}
@@ -267,7 +263,7 @@ try{
   // 20/10 : analyse pro : feu de tendance des lignes suivies, tes lignes tracées franchies, retour dans un bloc d'ordres
   try{ jour.pro = await page.evaluate(async () => { try{ return await proAlertesRobot(); }catch(e){ return null; } }); }catch(e){}
   // 24/10 : scanner de marchés et rotation (une fois par jour, une soixantaine de marchés publics, rien de personnel)
-  if(!ESSAI && Date.now() - t0 < 200000) try{ const r = await page.evaluate(async () => { try{ return await Promise.race([scanLancer(), new Promise(ok => setTimeout(() => ok({ err: 'trop long, repris au prochain passage' }), 180000))]); }catch(e){ return { err: e.message }; } }); if(r && !r.deja) say(`scanner de marchés : ${r.err ? r.err : `${r.ok} marchés lus, ${r.ko} manquants`}`); }catch(e){}
+  if(Date.now() - t0 < 200000) try{ const r = await page.evaluate(async () => { try{ return await Promise.race([scanLancer(), new Promise(ok => setTimeout(() => ok({ err: 'trop long, repris au prochain passage' }), 180000))]); }catch(e){ return { err: e.message }; } }); if(r && !r.deja) say(`scanner de marchés : ${r.err ? r.err : `${r.ok} marchés lus, ${r.ko} manquants`}`); }catch(e){}
   enregistrer(H, jour);
   await releves.catch(() => {}); jour.duree = { tot: Math.round((Date.now() - t0)/1000), act: dureeAct, pv: dureePv - dureeAct }; // 24/10 : relevés finis, la durée compte tout le passage
   const al = alertes(H, jour, subs);
@@ -313,7 +309,7 @@ try{
   // le résultat, gardé dans mt_fred_repl, est repris par la page) — ici les sites répondent sans passerelle
   // 24/10 : + veille active : fiches FRED relues (toutes les 3 h par série) ; une série retirée ou plus mise à jour par la Fed
   // est recherchée tout de suite, sans attendre le seuil de retard
-  if(!ESSAI) try{ const R = await page.evaluate(async () => { let n = 0, v = null; try{ v = await fredVeille(); }catch(e){} try{ getStaleDataList(); for(const p of Object.values(window.__fredReplBusy || {})){ try{ if(await Promise.race([p, new Promise(r => setTimeout(r, 60000))])) n++; }catch(e){} } }catch(e){} return { n, lus: v ? v.lus : 0, sus: v ? v.suspectes : [] }; });
+  try{ const R = await page.evaluate(async () => { let n = 0, v = null; try{ v = await fredVeille(); }catch(e){} try{ getStaleDataList(); for(const p of Object.values(window.__fredReplBusy || {})){ try{ if(await Promise.race([p, new Promise(r => setTimeout(r, 60000))])) n++; }catch(e){} } }catch(e){} return { n, lus: v ? v.lus : 0, sus: v ? v.suspectes : [] }; });
     if(R.sus.length) say(`veille FRED : ${R.lus} fiche(s) relue(s), série(s) retirée(s) ou plus mise(s) à jour par la Fed : ${R.sus.join(', ')}`);
     if(R.n) say(`${R.n} série(s) retirée(s) remplacée(s) automatiquement`); }catch(e){}
   await releves; // 24/10 : relevés lancés en parallèle plus haut (pièces, or, dirigeants, données en plus)
@@ -363,7 +359,6 @@ try{
   if(existsSync('static')) for(const f of readdirSync('static')) copyFileSync('static/'+f, 'out/'+f); // icônes, manifeste, service worker
   writeFileSync('out/.nojekyll', '');
   say(`état enregistré : ${Object.keys(st.ls).length} historiques, ${Object.keys(st.idb).length} données en cache`);
-  if(ESSAI) console.log('ESSAI-BILAN ' + JSON.stringify({ ls: Object.keys(st.ls).length, idb: Object.keys(st.idb).length, avant: prev ? { ls: Object.keys(prev.ls || {}).length, idb: Object.keys(prev.idb || {}).length } : null, t: Object.keys(jour.t || {}).filter(k => jour.t[k] != null).length }));
 }catch(e){
   say('échec : ' + String(e && e.message || e).split('\n')[0].slice(0, 160));
   code = 1;
