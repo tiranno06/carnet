@@ -161,6 +161,8 @@ export async function releveNouveaux(prev){
     const hist = { ...((p && p.hist) || {}) }; hist[new Date().toISOString().slice(0, 10)] = +b.toFixed(2); return { hist: garder(hist, 1100), stable: d.market_cap_percentage.usdt != null ? +(d.market_cap_percentage.usdt + (d.market_cap_percentage.usdc || 0)).toFixed(2) : null }; }, 12);
   // 30/10 : liquidations sur le Bitcoin (OKX ne donne que les dernières 24 h : le robot additionne jour par jour, à chaque passage)
   await essai('liq', async p => liqReleve(p), 0.2);
+  // 30/10 : ton des communiqués de la Fed et de la BCE (mots qui poussent vers des taux plus hauts ou plus bas), relu toutes les 6 h
+  await essai('ton', async p => tonReleve(p), 6);
   return { o, err };
 }
 const jourParis = t => new Date(t).toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
@@ -186,4 +188,44 @@ async function liqReleve(p){
   Object.values(j).forEach(c => { c.l = Math.round(c.l); c.s = Math.round(c.s); });
   const jj = garder(j, 800), garde = new Set(Object.keys(jj));
   return { j: jj, inc: [...inc].filter(k => garde.has(k)).sort(), der: Math.max(der, der0), debut: prev.debut || debut };
+}
+
+// ---- ton des banques centrales (30/10) : chaque communiqué de décision est lu une seule fois, puis gardé ----
+// mots et expressions comptés (en anglais, langue des communiqués) ; « ferme » = vers des taux plus hauts, « accommodant » = vers des taux plus bas
+// décisions sur les taux (comptent triple) puis vocabulaire ; mots de simple description répétés à chaque communiqué écartés (ex. « purchase programme » de la BCE)
+export const TON_DEC_HAUT = /decided (?:today )?to (?:raise|increase) (?:the target range|the three key|the key ecb|the interest rates?|the deposit facility)/g;
+export const TON_DEC_BAS = /decided (?:today )?to (?:lower|reduce|cut) (?:the target range|the three key|the key ecb|the interest rates?|the deposit facility)/g;
+export const TON_FERME = ['additional policy firming', 'further policy firming', 'tighten', 'sufficiently restrictive', 'remains elevated', 'elevated inflation', 'upside risks to inflation', 'upside risks to the inflation',
+  'inflationary pressures', 'price pressures', 'vigilant', 'robust', 'strong', 'solid pace', 'remains tight', 'tight labour market', 'tight labor market', 'wage growth', 'reduce its holdings', 'end net asset purchases',
+  'end net purchases', 'too high for too long', 'reducing its holdings'];
+export const TON_DOUX = ['accommodative', 'accommodation', 'easing', 'downside risks', 'weakened', 'weakening', 'slowed', 'slowing', 'moderated', 'softened', 'has moved up', 'risks to employment', 'support the economy',
+  'net asset purchases', 'net purchases under', 'increase its holdings', 'patient', 'subdued', 'disinflation', 'inflation has eased', 'subsided', 'muted', 'uncertainties', 'act as appropriate to sustain'];
+const tonTexte = h => h.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#8217;|&rsquo;|’/g, "'").replace(/&[a-z#0-9]+;/g, ' ').replace(/\s+/g, ' ');
+export function tonMesure(t){
+  t = t.toLowerCase(); const compte = L => { const o = {}; L.forEach(m => { const n = t.split(m).length - 1; if(n) o[m] = n; }); return o; };
+  const f = compte(TON_FERME), d = compte(TON_DOUX);
+  if(d['net asset purchases'] && f['end net asset purchases']) d['net asset purchases'] -= f['end net asset purchases']; Object.keys(d).forEach(k => { if(d[k] <= 0) delete d[k]; });
+  const h = (t.match(TON_DEC_HAUT) || []).length + (t.match(/will be (?:increased|raised) by \d+ basis points/g) || []).length, b = (t.match(TON_DEC_BAS) || []).length + (t.match(/will be (?:decreased|lowered|reduced) by \d+ basis points/g) || []).length, dec = h > b ? 1 : b > h ? -1 : 0;
+  const nf = Object.values(f).reduce((x, y) => x + y, 0) + 3*h, nd = Object.values(d).reduce((x, y) => x + y, 0) + 3*b;
+  // + 4 au dénominateur : un communiqué avec très peu de mots repérés reste proche de zéro au lieu de sauter à ±100
+  return { s: Math.round((nf - nd) / (nf + nd + 4) * 100), nf, nd, dec, mf: (h ? ['hausse de taux décidée'] : []).concat(Object.keys(f)), md: (b ? ['baisse de taux décidée'] : []).concat(Object.keys(d)) };
+}
+async function tonReleve(p){
+  const prev = p || {}, fed = { ...(prev.fed || {}) }, bce = { ...(prev.bce || {}) }, an = new Date().getUTCFullYear(); let nouveaux = 0;
+  const pause = () => new Promise(r => setTimeout(r, 300));
+  // Fed : calendrier (5 dernières années) + archives depuis 2018
+  const liensFed = new Set(); const ajFed = h => (h.match(/\/newsevents\/pressreleases\/monetary\d{8}a\.htm/g) || []).forEach(x => liensFed.add(x));
+  ajFed(await lire('https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm'));
+  for(let y = 2018; y <= an - 5; y++){ try{ ajFed(await lire(`https://www.federalreserve.gov/monetarypolicy/fomchistorical${y}.htm`)); }catch(e){} await pause(); }
+  for(const u of [...liensFed].sort()){ const d = u.match(/(\d{4})(\d\d)(\d\d)a/), k = `${d[1]}-${d[2]}-${d[3]}`; if(fed[k] || k < '2018' || nouveaux >= 40) continue;
+    try{ const t = tonTexte(await lire('https://www.federalreserve.gov' + u)); if(!/federal funds rate/i.test(t)) continue; const a = t.indexOf('Share'), b = t.search(/Voting for/i);
+      fed[k] = tonMesure(t.slice(a > 0 && a < 2000 ? a : 0, b > 0 ? b : undefined)); nouveaux++; }catch(e){} await pause(); }
+  // BCE : décisions de politique monétaire depuis 2017 (une page par année)
+  for(let y = 2017; y <= an; y++){ let h = ''; try{ h = await lire(`https://www.ecb.europa.eu/press/govcdec/mopo/${y}/html/index_include.en.html`); }catch(e){ continue; }
+    for(const u of [...new Set(h.match(/\/press\/pr\/date\/\d{4}\/html\/ecb\.mp\d{6}[^"]*\.en\.html/g) || [])].sort()){ const d = u.match(/mp(\d\d)(\d\d)(\d\d)/), k = `20${d[1]}-${d[2]}-${d[3]}`; if(bce[k] || nouveaux >= 40) continue;
+      try{ const t = tonTexte(await lire('https://www.ecb.europa.eu' + u)); const a = t.search(/PRESS RELEASE/), b = t.search(/(CONTACT|Media contacts|Reproduction is permitted)/); if(!/interest rate/i.test(t)) continue;
+        bce[k] = tonMesure(t.slice(a > 0 ? a : 0, b > a ? b : undefined)); nouveaux++; }catch(e){} await pause(); }
+    await pause(); }
+  if(Object.keys(fed).length < 10 && Object.keys(bce).length < 10) throw new Error('communiqués des banques centrales illisibles');
+  return { fed, bce };
 }
