@@ -162,7 +162,7 @@ export async function releveNouveaux(prev){
   // 30/10 : liquidations sur le Bitcoin (OKX ne donne que les dernières 24 h : le robot additionne jour par jour, à chaque passage)
   await essai('liq', async p => liqReleve(p), 0.2);
   // 30/10 : ton des communiqués de la Fed et de la BCE (mots qui poussent vers des taux plus hauts ou plus bas), relu toutes les 6 h
-  await essai('ton', async p => tonReleve(p), 6);
+  await essai('ton', async p => tonReleve(p), o.ton && o.ton.plein !== true ? 0.2 : 6); // tant que l'historique n'est pas complet : à chaque passage
   return { o, err };
 }
 const jourParis = t => new Date(t).toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
@@ -217,15 +217,16 @@ async function tonReleve(p){
   const liensFed = new Set(); const ajFed = h => (h.match(/\/newsevents\/pressreleases\/monetary\d{8}a\.htm/g) || []).forEach(x => liensFed.add(x));
   ajFed(await lire('https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm'));
   for(let y = 2018; y <= an - 5; y++){ try{ ajFed(await lire(`https://www.federalreserve.gov/monetarypolicy/fomchistorical${y}.htm`)); }catch(e){} await pause(); }
-  for(const u of [...liensFed].sort()){ const d = u.match(/(\d{4})(\d\d)(\d\d)a/), k = `${d[1]}-${d[2]}-${d[3]}`; if(fed[k] || k < '2018' || nouveaux >= 40) continue;
+  // les plus récents d'abord
+  for(const u of [...liensFed].sort().reverse()){ const d = u.match(/(\d{4})(\d\d)(\d\d)a/), k = `${d[1]}-${d[2]}-${d[3]}`; if(fed[k] || k < '2018' || nouveaux >= 40) continue;
     try{ const t = tonTexte(await lire('https://www.federalreserve.gov' + u)); if(!/federal funds rate/i.test(t)) continue; const a = t.indexOf('Share'), b = t.search(/Voting for/i);
       fed[k] = tonMesure(t.slice(a > 0 && a < 2000 ? a : 0, b > 0 ? b : undefined)); nouveaux++; }catch(e){} await pause(); }
   // BCE : décisions de politique monétaire depuis 2017 (une page par année)
-  for(let y = 2017; y <= an; y++){ let h = ''; try{ h = await lire(`https://www.ecb.europa.eu/press/govcdec/mopo/${y}/html/index_include.en.html`); }catch(e){ continue; }
-    for(const u of [...new Set(h.match(/\/press\/pr\/date\/\d{4}\/html\/ecb\.mp\d{6}[^"]*\.en\.html/g) || [])].sort()){ const d = u.match(/mp(\d\d)(\d\d)(\d\d)/), k = `20${d[1]}-${d[2]}-${d[3]}`; if(bce[k] || nouveaux >= 40) continue;
+  for(let y = an; y >= 2017; y--){ let h = ''; try{ h = await lire(`https://www.ecb.europa.eu/press/govcdec/mopo/${y}/html/index_include.en.html`); }catch(e){ continue; }
+    for(const u of [...new Set(h.match(/\/press\/pr\/date\/\d{4}\/html\/ecb\.mp\d{6}[^"]*\.en\.html/g) || [])].sort().reverse()){ const d = u.match(/mp(\d\d)(\d\d)(\d\d)/), k = `20${d[1]}-${d[2]}-${d[3]}`; if(bce[k] || nouveaux >= 40) continue;
       try{ const t = tonTexte(await lire('https://www.ecb.europa.eu' + u)); const a = t.search(/PRESS RELEASE/), b = t.search(/(CONTACT|Media contacts|Reproduction is permitted)/); if(!/interest rate/i.test(t)) continue;
         bce[k] = tonMesure(t.slice(a > 0 ? a : 0, b > a ? b : undefined)); nouveaux++; }catch(e){} await pause(); }
     await pause(); }
   if(Object.keys(fed).length < 10 && Object.keys(bce).length < 10) throw new Error('communiqués des banques centrales illisibles');
-  return { fed, bce };
+  return { fed, bce, plein: nouveaux < 40 };
 }
