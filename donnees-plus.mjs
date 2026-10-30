@@ -159,5 +159,31 @@ export async function releveNouveaux(prev){
     if(L.length < 20) throw new Error('OKX : trop peu de relevés'); return { pts: L.map(([t, r]) => [new Date(t).toISOString().slice(0, 16), +(r*100).toFixed(5)]) }; }, 6);
   await essai('dom', async p => { const d = JSON.parse(await lire('https://api.coingecko.com/api/v3/global')).data, b = d && d.market_cap_percentage && d.market_cap_percentage.btc; if(!(b > 0)) throw new Error('CoinGecko : part du Bitcoin absente');
     const hist = { ...((p && p.hist) || {}) }; hist[new Date().toISOString().slice(0, 10)] = +b.toFixed(2); return { hist: garder(hist, 1100), stable: d.market_cap_percentage.usdt != null ? +(d.market_cap_percentage.usdt + (d.market_cap_percentage.usdc || 0)).toFixed(2) : null }; }, 12);
+  // 30/10 : liquidations sur le Bitcoin (OKX ne donne que les dernières 24 h : le robot additionne jour par jour, à chaque passage)
+  await essai('liq', async p => liqReleve(p), 0.2);
   return { o, err };
+}
+const jourParis = t => new Date(t).toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
+async function liqReleve(p){
+  const prev = p || {}, j = { ...(prev.j || {}) }, inc = new Set(prev.inc || []), der0 = prev.der || 0, maint = Date.now();
+  let der = der0, plusVieux = Infinity;
+  // contrat USDT : 0,01 BTC (valeur = taille × 0,01 × prix) ; contrat USD : 100 $ par contrat
+  for(const [uly, val] of [['BTC-USDT', (sz, px) => sz*0.01*px], ['BTC-USD', sz => sz*100]]){
+    let apres = null, fin = false;
+    for(let page = 0; page < 70 && !fin; page++){
+      const d = JSON.parse(await lire(`https://www.okx.com/api/v5/public/liquidation-orders?instType=SWAP&uly=${uly}&state=filled&limit=100` + (apres ? `&after=${apres}` : '')));
+      if(d.code !== '0') throw new Error('OKX liquidations : ' + (d.msg || d.code));
+      const L = (d.data && d.data[0] && d.data[0].details) || []; if(!L.length) break;
+      for(const x of L){ const t = +x.ts; if(t <= der0){ fin = true; continue; } const v = val(+x.sz, +x.bkPx); if(!(v > 0)) continue;
+        const k = jourParis(t), c = j[k] || (j[k] = { l: 0, s: 0 }); x.posSide === 'long' ? c.l += v : c.s += v; der = Math.max(der, t); plusVieux = Math.min(plusVieux, t); }
+      apres = Math.min(...L.map(x => +x.ts)); await new Promise(r => setTimeout(r, 150));
+    }
+  }
+  // journées pas entièrement couvertes (premier relevé, ou robot arrêté plus de 24 h) : marquées incomplètes
+  const debut = der0 || (isFinite(plusVieux) ? plusVieux : maint);
+  if(!der0) inc.add(jourParis(debut));
+  else if(isFinite(plusVieux) && plusVieux - der0 > 3600000){ for(let t = der0; t <= plusVieux; t += 3600000) inc.add(jourParis(t)); inc.add(jourParis(plusVieux)); }
+  Object.values(j).forEach(c => { c.l = Math.round(c.l); c.s = Math.round(c.s); });
+  const jj = garder(j, 800), garde = new Set(Object.keys(jj));
+  return { j: jj, inc: [...inc].filter(k => garde.has(k)).sort(), der: Math.max(der, der0), debut: prev.debut || debut };
 }
