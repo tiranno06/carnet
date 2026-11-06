@@ -67,6 +67,12 @@ jobs:
         run: node robot.mjs
         env:
           MOT_DE_PASSE: ${{ secrets.MOT_DE_PASSE }}
+      # 07/11 : une publication a pu arriver pendant le passage : on reprend la toute dernière appli publiée
+      # (sinon le robot remettrait l'ancienne en ligne jusqu'au passage suivant)
+      - name: Dernière version publiée de l'appli
+        if: hashFiles('out/data.enc') != ''
+        continue-on-error: true
+        run: git fetch -q --depth=1 origin main && git show FETCH_HEAD:app.enc > out/app.enc.neuf && mv out/app.enc.neuf out/app.enc
       - name: Mémoriser l'état (branche site, écrasée à chaque passage)
         if: hashFiles('out/data.enc') != ''
         run: |
