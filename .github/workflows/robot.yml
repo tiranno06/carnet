@@ -74,7 +74,9 @@ jobs:
           git init -q -b site
           git add -A
           git -c user.name=robot -c user.email=robot@users.noreply.github.com commit -qm maj
-          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site
+          # 06/11 : GitHub refuse parfois l'envoi (« fatal error in commit_refs ») : jusqu'à 3 nouveaux essais
+          ok=0; for d in 0 10 30 60; do sleep $d; if git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site; then ok=1; break; fi; echo "envoi refusé par GitHub, nouvel essai"; done
+          [ $ok -eq 1 ] || exit 1
       # 17/10 : les notifications partent seulement maintenant, une fois l'état enregistré
       - name: Notifications
         if: hashFiles('envoi.enc') != ''

@@ -49,12 +49,18 @@ const srv = http.createServer((req, res) => {
 await new Promise(r => srv.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${srv.address().port}`;
 
+const UA_FRED = 'carnet-robot';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36';
 const browser = await chromium.launch({
   executablePath: process.env.CHROME || '/usr/bin/google-chrome', headless: true,
   args: ['--disable-web-security', '--disable-features=IsolateOrigins,site-per-process', '--no-first-run'],
 });
 let code = 0;
+// 06/11 : une demande réseau encore en route quand le navigateur se ferme faisait planter le passage APRÈS l'enregistrement
+// de l'état (ProtocolError « closed ») : l'état n'était alors ni publié ni suivi des notifications. Cette erreur-là est ignorée.
+const fermeture = e => /closed|crashed|Target page, context or browser has been closed/i.test(String(e && (e.message || e)) + ' ' + String(e && e.type || '')) || /ProtocolError/.test(String(e && e.name));
+process.on('uncaughtException', e => { if(fermeture(e)){ console.log('(une demande interrompue par la fermeture du navigateur a été ignorée)'); return; } console.error(e); process.exit(1); });
+process.on('unhandledRejection', e => { if(fermeture(e)){ console.log('(une demande interrompue par la fermeture du navigateur a été ignorée)'); return; } console.error(e); process.exit(1); });
 try{
   const ctx = await browser.newContext({
     userAgent: UA,
@@ -76,11 +82,19 @@ try{
     for(const [re, f] of RELAIS){ const m = rq.url().match(re); if(m){ try{ cible = f(m); }catch(e){} break; } }
     if(!cible || rq.method() !== 'GET') return route.continue().catch(() => {});
     try{
-      const r = await route.fetch({ url: cible, headers: { 'user-agent': UA, 'accept': '*/*', 'accept-language': 'fr-FR,fr;q=0.9,en;q=0.8' }, timeout: 15000 });
+      // 06/11 : depuis les serveurs de GitHub, la Fed (fred.stlouisfed.org) ne répond plus à un navigateur Chrome (attente sans fin),
+      // mais répond tout de suite à un programme qui dit son nom : FRED est donc lu avec UA_FRED
+      const r = await route.fetch({ url: cible, headers: { 'user-agent': /^https:\/\/(fred|api)\.stlouisfed\.org\//.test(cible) ? UA_FRED : UA, 'accept': '*/*', 'accept-language': 'fr-FR,fr;q=0.9,en;q=0.8' }, timeout: 15000 });
       if(r.status() >= 400){ direct.repli++; return route.continue().catch(() => {}); }
       direct.ok++;
       return route.fulfill({ status: r.status(), body: await r.body(), headers: { 'content-type': r.headers()['content-type'] || 'text/plain; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
     }catch(e){ direct.repli++; return route.continue().catch(() => {}); }
+  });
+  // 06/11 : lectures directes de la Fed par la page : même nom de programme que ci-dessus (sinon attente sans réponse)
+  await ctx.route(/^https:\/\/fred\.stlouisfed\.org\//, async route => {
+    try{ const r = await route.fetch({ headers: { 'user-agent': UA_FRED, 'accept': '*/*' }, timeout: 20000 });
+      return route.fulfill({ status: r.status(), body: await r.body(), headers: { 'content-type': r.headers()['content-type'] || 'text/plain; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' } }); }
+    catch(e){ return route.continue().catch(() => {}); }
   });
   // 16/10 : fichiers que le site refuse à un navigateur mais accepte d'un serveur (FINRA : historique de la dette sur marge)
   await ctx.route(/^https:\/\/www\.finra\.org\/.*\.xlsx$/, async route => {
