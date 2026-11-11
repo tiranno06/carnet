@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
 import { relevePieces, releveSitesUtilisateur } from './pieces.mjs';
-import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux } from './donnees-plus.mjs';
+import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux, releveImmo } from './donnees-plus.mjs';
 
 const t0 = Date.now();
 const say = m => console.log(`[${Math.round((Date.now()-t0)/1000)} s] ${m}`);
@@ -16,7 +16,7 @@ if(!existsSync('app.enc')){ say("aucune application publiée pour l'instant : ri
 if(!MDP){ say('secret MOT_DE_PASSE pas encore configuré : rien à faire'); process.exit(0); }
 
 // mêmes familles de données que la page reprend (jamais de clé, jamais de donnée personnelle)
-const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|pieces_prix|pieces_hist|or_plus|inities|wl_inities|wl_projournal|wl_bpa|scan|secours)/;
+const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|immo_stats|pieces_prix|pieces_hist|or_plus|inities|wl_inities|wl_projournal|wl_bpa|scan|secours)/;
 // 16/10 : les compteurs de quotas des services gratuits sont gardés d'un passage à l'autre (le robot passe bien plus souvent)
 
 const key = await cle(MDP, JSON.parse(readFileSync('sel.json', 'utf8')));
@@ -178,6 +178,8 @@ try{
     // 23/10 : nouvelles données (taux, INSEE, carburants, or de Shanghai et de Londres, crypto), chacune une fois par jour
     try{ const N = await releveNouveaux(O.nv); if(JSON.stringify(N.o) !== JSON.stringify(O.nv || {})){ O.nv = N.o; neuf = true; } if(N.err.length) say('nouvelles données : ' + N.err.join(' ; ')); }catch(e){ say('nouvelles données : relevé impossible'); }
     if(neuf) await ecrit('mt_or_plus', O);
+    // 11/11 : prix de l'immobilier dans la commune choisie (donnée personnelle : jamais nommée dans ce journal public)
+    try{ const lieu = perso.mt_immo_lieu ? JSON.parse(perso.mt_immo_lieu) : null; if(lieu && lieu.code){ const avant = await lit('mt_immo_stats'), S = await releveImmo(lieu.code, avant && avant.code === lieu.code ? avant : null); if(S !== avant){ await ecrit('mt_immo_stats', S); say('immobilier : ventes relues'); } } }catch(e){ say('immobilier : relevé impossible (' + String(e.message || '').replace(/\d{5}/g, '…').slice(0, 60) + ')'); }
     const I = await lit('mt_inities');
     if(!I || Date.now() - I.at > 6*3600000){
       try{ await ecrit('mt_inities', await releveInitiesMarche(I)); }catch(e){ say('dirigeants (marché) : ' + e.message); }
@@ -228,7 +230,7 @@ try{
     // 09/10 (n°8) : de quoi suivre ta règle de DCA en vrai (multiplicateur du jour + cours des ETF)
     try{ const D = window.__coursLastD || {}; const lastV = a => a && a.length ? a[a.length-1].value : null; o.dca = { m: typeof dcaMultiplier==='function' ? dcaMultiplier() : null, rule: typeof dcaRule==='function' ? dcaRule() : null, world: lastV(D.world), spx: lastV(D.spx), btc: window.__marketData?.btc?.price ?? null, gold: window.__marketData?.gold?.price ?? null }; }catch(e){}
     // 09/10 (n°3) : annonces importantes de demain
-    try{ const dm = new Date(); dm.setHours(0,0,0,0); dm.setDate(dm.getDate()+1); o.eco = ecoEvents(2).filter(e => +e.date === +dm).map(e => { const K = ECO_KINDS[e.kind] || {}; return { k: e.kind, n: K.name, i: K.ico, imp: K.imp, h: ecoParisTime(e.date, K.et || [8,30]), w: K.why }; }); }catch(e){}
+    try{ const dm = new Date(); dm.setHours(0,0,0,0); dm.setDate(dm.getDate()+1); o.eco = ecoEvents(2).filter(e => +e.date === +dm).map(e => { const K = ECO_KINDS[e.kind] || {}; return { k: e.kind, n: K.name, i: K.ico, imp: typeof ecoImp === 'function' ? ecoImp(e) : K.imp, h: e.h || ecoParisTime(e.date, K.et || [8,30]), w: typeof ecoNotifTexte === 'function' ? ecoNotifTexte(e) : K.why }; }); }catch(e){}
     // 16/10 : résumé « Que faire ce mois-ci ? » (envoyé le 1er du mois)
     try{ o.mois = typeof moisLines==='function' ? moisLines() : null; }catch(e){}
     // 16/10 : pages dont la présentation a changé (mises de côté, source de secours utilisée)
@@ -362,7 +364,7 @@ try{
         writeFileSync('out/invite-app.enc', await chiffre(kg, sansCles));
         // liste de suivi non partagée : rien qui la révèle (analyses mt_wl_…, données en cache portant un de ses codes)
         let codes = []; try{ codes = JSON.parse(perso.mt_watchlist || '[]').map(x => x && x.s).filter(s => s && s.length >= 3); }catch(e){}
-        const cache = o => voir.suivi ? o : Object.fromEntries(Object.entries(o || {}).filter(([k]) => !/^mt_wl_/.test(k) && !codes.some(s => k.includes(s))));
+        const cache = o => Object.fromEntries(Object.entries(o || {}).filter(([k]) => !/^mt_immo_/.test(k) && (voir.suivi || (!/^mt_wl_/.test(k) && !codes.some(s => k.includes(s)))))); // 11/11 : ta commune (immobilier) n'est jamais montrée à l'invité
         writeFileSync('out/invite-data.enc', await chiffre(kg, JSON.stringify({ v: 1, at: snap.at, ls: cache(snap.ls), idb: cache(snap.idb), perso: persoG, invite: voir })));
         writeFileSync('out/invite-hist.enc', await chiffre(kg, JSON.stringify(HG)));
         say('accès invité : fichiers préparés');

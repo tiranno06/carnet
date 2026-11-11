@@ -163,6 +163,8 @@ export async function releveNouveaux(prev){
   await essai('liq', async p => liqReleve(p), 0.2);
   // 30/10 : ton des communiqués de la Fed et de la BCE (mots qui poussent vers des taux plus hauts ou plus bas), relu toutes les 6 h
   await essai('ton', async p => tonReleve(p), o.ton && o.ton.plein !== true ? 0.2 : 6); // tant que l'historique n'est pas complet : à chaque passage
+  // 11/11 : grandes annonces de la semaine (États-Unis, zone euro) avec le chiffre attendu par les économistes et le précédent
+  await essai('cal', async p => calReleve(p), 6);
   return { o, err };
 }
 const jourParis = t => new Date(t).toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
@@ -229,4 +231,46 @@ async function tonReleve(p){
     await pause(); }
   if(Object.keys(fed).length < 10 && Object.keys(bce).length < 10) throw new Error('communiqués des banques centrales illisibles');
   return { fed, bce, plein: nouveaux < 40 };
+}
+
+// 11/11 : calendrier des annonces de la semaine (fichier public de ForexFactory, mis à jour en continu ; les navigateurs ne peuvent
+// pas le lire directement). On garde les annonces d'impact fort ou moyen des États-Unis et de la zone euro, 45 jours en arrière.
+async function calReleve(p){
+  const d = JSON.parse(await lire('https://nfs.faireconomy.media/ff_calendar_thisweek.json'));
+  if(!Array.isArray(d) || !d.length) throw new Error('calendrier : format changé');
+  const ev = { ...((p && p.ev) || {}) };
+  d.forEach(e => { if(!e || !/^(USD|EUR)$/.test(e.country) || !/^(High|Medium)$/.test(e.impact) || !e.date || !e.title) return;
+    ev[String(e.date).slice(0, 10) + '|' + e.country + '|' + e.title] = { d: e.date, p: e.country, t: String(e.title).slice(0, 80), i: e.impact === 'High' ? 3 : 2, f: String(e.forecast || '').slice(0, 12), pr: String(e.previous || '').slice(0, 12) }; });
+  const lim = Date.now() - 45*86400000; Object.keys(ev).forEach(k => { if(!(Date.parse(ev[k].d) >= lim)) delete ev[k]; });
+  return { ev };
+}
+
+// 11/11 : prix de l'immobilier dans la commune choisie par le propriétaire (ventes réelles enregistrées par les notaires et
+// l'administration fiscale, fichiers publics « DVF » commune par commune). Rien n'est écrit dans le journal sur la commune.
+const csvLigne = l => { const o = []; let c = '', q = false; for(let i = 0; i < l.length; i++){ const ch = l[i]; if(q){ if(ch === '"'){ if(l[i + 1] === '"'){ c += '"'; i++; } else q = false; } else c += ch; } else if(ch === '"') q = true; else if(ch === ','){ o.push(c); c = ''; } else c += ch; } o.push(c); return o; };
+export function dvfLire(t){
+  const L = t.split(/\r?\n/).filter(Boolean); if(L.length < 2) return [];
+  const h = csvLigne(L[0]), ix = n => h.indexOf(n), I = { id: ix('id_mutation'), d: ix('date_mutation'), nat: ix('nature_mutation'), v: ix('valeur_fonciere'), ty: ix('type_local'), s: ix('surface_reelle_bati') };
+  if(Object.values(I).some(x => x < 0)) throw new Error('DVF : colonnes changées');
+  const M = new Map();
+  for(let k = 1; k < L.length; k++){ const r = csvLigne(L[k]); const id = r[I.id]; if(!id) continue; let m = M.get(id); if(!m){ m = { d: r[I.d], nat: r[I.nat], v: +r[I.v], loc: [] }; M.set(id, m); }
+    if(r[I.ty] === 'Appartement' || r[I.ty] === 'Maison') m.loc.push({ t: r[I.ty] === 'Maison' ? 'm' : 'a', s: +r[I.s] }); }
+  const out = [];
+  M.forEach(m => { if(m.nat !== 'Vente' || m.loc.length !== 1 || !(m.v > 0)) return; const { t, s } = m.loc[0]; if(!(s >= 9)) return; const pm = m.v / s; if(pm < 300 || pm > 30000) return; out.push({ d: m.d, t, pm, s }); });
+  return out;
+}
+export async function releveImmo(code, prev){
+  if(!/^(\d{5}|2[AB]\d{3})$/.test(String(code || ''))) throw new Error('commune invalide');
+  if(prev && prev.code === code && Date.now() - prev.at < 6*86400000) return prev; // les fichiers ne changent que 2 fois par an
+  const dep = code.startsWith('97') ? code.slice(0, 3) : code.slice(0, 2), an = new Date().getUTCFullYear(), V = [];
+  for(let y = an - 7; y <= an; y++){ try{ V.push(...dvfLire(await lire(`https://files.data.gouv.fr/geo-dvf/latest/csv/${y}/communes/${dep}/${code}.csv`))); }catch(e){ if(!/ 404$/.test(e.message)) throw e; } }
+  if(!V.length) throw new Error('DVF : aucune vente trouvée');
+  const med = a => { const b = a.slice().sort((x, y) => x - y), n = b.length; return n ? (n % 2 ? b[(n - 1) / 2] : (b[n / 2 - 1] + b[n / 2]) / 2) : null; };
+  const S = { a: {}, m: {} }, G = { a: {}, m: {} };
+  V.forEach(x => { const k = x.d.slice(0, 4) + '-' + (+x.d.slice(5, 7) <= 6 ? 1 : 2); (G[x.t][k] = G[x.t][k] || []).push(x.pm); });
+  ['a', 'm'].forEach(t => Object.entries(G[t]).forEach(([k, L]) => { S[t][k] = [Math.round(med(L)), L.length]; }));
+  // 12 derniers mois connus, et surfaces typiques
+  const fin = V.reduce((m, x) => x.d > m ? x.d : m, ''), deb = new Date(Date.parse(fin) - 365*86400000).toISOString().slice(0, 10), R = {};
+  ['a', 'm'].forEach(t => { const L = V.filter(x => x.t === t && x.d > deb); R[t] = L.length ? { pm: Math.round(med(L.map(x => x.pm))), n: L.length, s: Math.round(med(L.map(x => x.s))), bas: Math.round(med(L.map(x => x.pm).filter((v, i, A) => v <= med(A)))), haut: Math.round(med(L.map(x => x.pm).filter((v, i, A) => v >= med(A)))) } : null; });
+  return { code, at: Date.now(), der: fin, s: S, r: R, n: V.length };
 }
