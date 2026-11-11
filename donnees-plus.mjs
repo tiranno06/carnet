@@ -168,6 +168,9 @@ export async function releveNouveaux(prev){
   // 11/11 : activité réelle (onglet 🏭) : avions en vol à chaque passage (pas d'historique gratuit : il se construit), électricité
   await essai('avions', async p => avionsReleve(p), 0.33);
   await essai('elec', async p => elecReleve(p), o.elec && o.elec.plein ? 5 : 0.33); // tant que l'historique n'est pas rattrapé : à chaque passage
+  // 11/11 (soir) : ventes à découvert (FINRA, chaque séance ; historique rattrapé sur 1 an) et plus grandes fortunes (Forbes, en direct)
+  await essai('short', async p => shortReleve(p), o.short && o.short.plein ? 6 : 0.33);
+  await essai('fortunes', async p => fortunesReleve(p), 2);
   return { o, err };
 }
 const jourParis = t => new Date(t).toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
@@ -316,4 +319,26 @@ async function elecReleve(p){
   }
   o.plein = ['fr', 'de'].every(p => { const k = Object.keys(o.j[p]).sort()[0]; return k && k <= '2019-01-02'; });
   return o;
+}
+
+// 11/11 (soir) : part des actions vendues « à découvert » chaque séance aux États-Unis (fichiers publics quotidiens de la FINRA,
+// tous marchés confondus) : ensemble du marché, SPY (S&P 500) et QQQ (Nasdaq 100). 8 séances lues par passage jusqu'à 1 an d'historique.
+async function shortReleve(p){
+  const j = { ...((p && p.j) || {}) }, aLire = [];
+  for(let k = 1; k <= 380 && aLire.length < 8; k++){ const t = new Date(Date.now() - k*86400000), wd = t.getUTCDay(); if(wd === 0 || wd === 6) continue;
+    const d = t.toISOString().slice(0, 10); if(j[d] || (p && p.absent && p.absent.includes(d))) continue; aLire.push(d); }
+  const absent = [...((p && p.absent) || [])];
+  for(const d of aLire){ let t; try{ t = await lire(`https://cdn.finra.org/equity/regsho/daily/CNMSshvol${d.replace(/-/g, '')}.txt`); }catch(e){ if(/ (403|404)$/.test(e.message)){ absent.push(d); continue; } throw e; }
+    let sv = 0, tv = 0; const S = {}; t.split('\n').slice(1).forEach(l => { const c = l.split('|'); if(c.length < 5) return; const a = +c[2], b = +c[4]; if(!(b > 0)) return; sv += a; tv += b; if(c[1] === 'SPY' || c[1] === 'QQQ') S[c[1]] = +(a/b*100).toFixed(1); });
+    if(tv > 0) j[d] = { r: +(sv/tv*100).toFixed(2), spy: S.SPY ?? null, qqq: S.QQQ ?? null }; }
+  const ks = Object.keys(j).sort(), deb = new Date(Date.now() - 365*86400000).toISOString().slice(0, 10);
+  return { j: garder(j, 400), absent: absent.filter(d => d > deb).slice(-200), plein: ks.length > 0 && ks[0] <= new Date(Date.now() - 360*86400000).toISOString().slice(0, 10) };
+}
+// 11/11 (soir) : les 25 plus grandes fortunes du monde en direct (classement Forbes) : fortune, fortune de la veille, source ; total noté chaque jour
+async function fortunesReleve(p){
+  const d = JSON.parse(await lire('https://www.forbes.com/forbesapi/person/rtb/0/position/true.json?fields=personName,finalWorth,estWorthPrev,rank,source,countryOfCitizenship&limit=25'));
+  const L = ((d.personList || {}).personsLists || []).filter(x => x && x.finalWorth > 0).map(x => ({ n: String(x.personName).slice(0, 40), s: String(x.source || '').slice(0, 40), p: String(x.countryOfCitizenship || '').slice(0, 30), w: Math.round(x.finalWorth), v: x.estWorthPrev > 0 ? Math.round(x.estWorthPrev) : null }));
+  if(L.length < 10) throw new Error('Forbes : format changé');
+  const hist = { ...((p && p.hist) || {}) }; hist[jourParis(Date.now())] = { tot: L.reduce((a, x) => a + x.w, 0), top: Object.fromEntries(L.slice(0, 10).map(x => [x.n, x.w])) };
+  return { L, hist: garder(hist, 400), t: Date.now() };
 }

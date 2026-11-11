@@ -68,6 +68,11 @@ const AVIS = { publication: ["🛠️ Carnet : une mise à jour n'a pas pu être
 export function alertes(H, st, subs){
   const A = H.alerts = H.alerts || {}; const now = parisNow();
   const msgs = { zones: [], prevision: [], hebdo: [], pannes: [], agenda: [], matin: [], xc: [], susp: [], wl: [], wlv: [], liens: [] };
+  // 11/11 (soir) : nouvel appareil qui synchronise le Carnet (le 1er passage apprend les appareils déjà connus, sans prévenir)
+  msgs.appareil = [];
+  if(Array.isArray(st.appareils)){ const ids = st.appareils.map(x => x.id);
+    if(!Array.isArray(A.app)) A.app = ids;
+    else { st.appareils.filter(x => !A.app.includes(x.id)).forEach(x => msgs.appareil.push(`${x.nom}${x.premier ? ', ouvert pour la première fois le ' + new Date(x.premier).toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : ''}`)); A.app = [...new Set([...A.app, ...ids])].slice(-50); } }
   // 1. zones des températures
   A.z = A.z || {};
   Object.entries(st.t || {}).forEach(([k, t]) => {
@@ -231,6 +236,7 @@ export function alertes(H, st, subs){
     if(pr.pannes && msgs.secoursOk.length) out.push({ s, title:'✅ Carnet : sources de secours de nouveau en état', body: msgs.secoursOk[0] + ' répond de nouveau.', url:'./', tag:'carnet-secours' });
     if(pr.pannes && msgs.lent.length) out.push({ s, title:'⏱️ Carnet : le robot ralentit', body: msgs.lent.join('\n') + '. Rien n\'est cassé pour l\'instant ; Claude regardera lors de son audit.', url:'./', tag:'carnet-lent' });
     msgs.avis.forEach(c => out.push({ s, title: AVIS[c][0], body: AVIS[c][1], url:'./', tag:'carnet-avis-' + c }));
+    if(msgs.appareil.length) out.push({ s, title:'📱 Carnet : nouvel appareil', body:'Ton Carnet vient d\'être synchronisé sur un nouvel appareil : ' + msgs.appareil.join(' ; ') + '. Si ce n\'est pas toi, change ton mot de passe tout de suite.', url:'./', tag:'carnet-appareil' });
     if(msgs.cibles.length) out.push({ s, title:'🔔 Carnet : prix cible atteint', body: msgs.cibles.join('\n') + '\nPrix affiché hors livraison ; vérifie sur le site avant d\'acheter.', url:'./?vue=mymetals', tag:'carnet-cible' });
     if(pr.zones && msgs.div.length) out.push({ s, title:"🔀 Carnet : le prix et les indicateurs ne sont pas d'accord", body: msgs.div.join('\n') + '\nPas un signal d\'achat ou de vente : un moment pour ne rien décider sur un coup de tête.', url:'./', tag:'carnet-desaccord' });
     if(pr.hebdo && msgs.hebdo.length) out.push({ s, title:'📅 Carnet : résumé de la semaine', body: msgs.hebdo[0], url:'./', tag:'carnet-hebdo' });

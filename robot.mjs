@@ -270,6 +270,8 @@ try{
     }
   }catch(e){ say('contrôle des liens impossible'); }
   jour.integrite = integrite; jour.avis = avis;
+  // 11/11 (soir) : appareils qui synchronisent ton Carnet (un relevé par appareil dans le coffre) : notification si un nouveau apparaît
+  try{ jour.appareils = Object.entries(perso).filter(([k, v]) => /^mt_appareil_[a-z0-9]{8,}$/.test(k) && v && v !== 'null').map(([k, v]) => { const x = JSON.parse(v); return { id: k.slice(12), nom: String(x.nom || 'appareil').slice(0, 60), premier: x.premier || null }; }); }catch(e){}
   // 24/10 : sources de secours (Stooq, Tiingo, relais) testées chaque semaine, chaque jour si l'une était en échec
   try{ const S = await page.evaluate(async () => { try{ if(!secoursDu()) return { fait: false, R: secoursResume() }; await Promise.race([secoursTester(), new Promise(r => setTimeout(r, 90000))]); return { fait: true, R: secoursResume() }; }catch(e){ return null; } });
     if(S && S.R){ jour.secours = S.R.alerte; if(S.fait) say(`sources de secours : ${S.R.ok}/${S.R.n} répondent`); } }catch(e){}
