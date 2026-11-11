@@ -171,6 +171,7 @@ export async function releveNouveaux(prev){
   // 11/11 (soir) : ventes à découvert (FINRA, chaque séance ; historique rattrapé sur 1 an) et plus grandes fortunes (Forbes, en direct)
   await essai('short', async p => shortReleve(p), o.short && o.short.plein ? 6 : 0.33);
   await essai('fortunes', async p => fortunesReleve(p), 2);
+  await essai('lic', async p => licReleve(p), o.lic && o.lic.plein ? 12 : 0.33);
   return { o, err };
 }
 const jourParis = t => new Date(t).toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
@@ -341,4 +342,35 @@ async function fortunesReleve(p){
   if(L.length < 10) throw new Error('Forbes : format changé');
   const hist = { ...((p && p.hist) || {}) }; hist[jourParis(Date.now())] = { tot: L.reduce((a, x) => a + x.w, 0), top: Object.fromEntries(L.slice(0, 10).map(x => [x.n, x.w])) };
   return { L, hist: garder(hist, 400), t: Date.now() };
+}
+
+// 11/11 (nuit) : licenciements annoncés chaque mois par les entreprises américaines (rapports publics de Challenger, Gray & Christmas, flux RSS
+// de la rubrique « job cuts report ») : nombre du mois, et ceux du mois précédent / de l'an passé cités dans le même texte. Historique rattrapé
+// à raison de 4 pages du flux par passage (≈ 2013 → aujourd'hui), puis seulement la 1re page.
+const LIC_MOIS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function licTexte(x){ const e = s => s.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ');
+  return e(e(x).replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' '); }
+export function licLire(xml){
+  const M = {}, MR = LIC_MOIS.join('|');
+  for(const it of xml.split('<item>').slice(1)){
+    const pd = (it.match(/<pubDate>([^<]+)</) || [])[1]; if(!pd) continue; const pub = new Date(pd); if(isNaN(pub)) continue;
+    const corps = licTexte(it.split('</item>')[0]), an = (mo, ref) => ref.mo >= mo ? ref.y : ref.y - 1;
+    let m = corps.match(new RegExp(`announced ([\\d,]{4,}) (?:job )?cuts (?:in|for|during) (${MR})(?:,? (\\d{4}))?\\b`)), n, mo, y;
+    if(m){ n = m[1]; mo = LIC_MOIS.indexOf(m[2]) + 1; y = m[3] ? +m[3] : an(mo, { y: pub.getUTCFullYear(), mo: pub.getUTCMonth() + 1 }); }
+    else { m = corps.match(new RegExp(`(${MR})(?: \\d{4})? Job Cuts? Report:[^0-9]{0,60}?([\\d,]{5,})`)); if(!m) continue; mo = LIC_MOIS.indexOf(m[1]) + 1; n = m[2]; y = an(mo, { y: pub.getUTCFullYear(), mo: pub.getUTCMonth() + 1 }); }
+    const k = `${y}-${String(mo).padStart(2, '0')}`; if(M[k] == null) M[k] = +n.replace(/,/g, '');
+    for(const r of corps.matchAll(new RegExp(`from (?:the )?([\\d,]{4,}) (?:job )?cuts announced in (${MR})(?:,? (\\d{4}))?`, 'g'))){ const m2 = LIC_MOIS.indexOf(r[2]) + 1, y2 = r[3] ? +r[3] : an(m2, { y, mo });
+      const k2 = `${y2}-${String(m2).padStart(2, '0')}`; if(M[k2] == null) M[k2] = +r[1].replace(/,/g, ''); }
+  }
+  return M;
+}
+async function licReleve(p){
+  const m = { ...((p && p.m) || {}) }, url = n => 'https://www.challengergray.com/blog/category/job-cuts-report/feed/' + (n > 1 ? `?paged=${n}` : '');
+  // la 1re page passe en priorité (chiffres récents) ; les mois déjà connus ne sont pas écrasés par les pages plus anciennes
+  const neuf = licLire(await lire(url(1))); Object.assign(m, neuf);
+  let pg = (p && p.pg) || 2, plein = !!(p && p.plein);
+  for(let i = 0; i < 4 && !plein; i++, pg++){ let x; try{ x = await lire(url(pg)); }catch(e){ if(/ 404$/.test(e.message)){ plein = true; break; } throw e; }
+    const L = licLire(x); if(!Object.keys(L).length && !x.includes('<item>')){ plein = true; break; } for(const [k, v] of Object.entries(L)) if(m[k] == null) m[k] = v; }
+  if(!Object.keys(m).length) throw new Error('Challenger : format changé');
+  return { m, pg, plein };
 }
