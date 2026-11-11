@@ -165,6 +165,9 @@ export async function releveNouveaux(prev){
   await essai('ton', async p => tonReleve(p), o.ton && o.ton.plein !== true ? 0.2 : 6); // tant que l'historique n'est pas complet : à chaque passage
   // 11/11 : grandes annonces de la semaine (États-Unis, zone euro) avec le chiffre attendu par les économistes et le précédent
   await essai('cal', async p => calReleve(p), 6);
+  // 11/11 : activité réelle (onglet 🏭) : avions en vol à chaque passage (pas d'historique gratuit : il se construit), électricité
+  await essai('avions', async p => avionsReleve(p), 0.33);
+  await essai('elec', async p => elecReleve(p), o.elec && o.elec.plein ? 5 : 0.33); // tant que l'historique n'est pas rattrapé : à chaque passage
   return { o, err };
 }
 const jourParis = t => new Date(t).toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
@@ -273,4 +276,38 @@ export async function releveImmo(code, prev){
   const fin = V.reduce((m, x) => x.d > m ? x.d : m, ''), deb = new Date(Date.parse(fin) - 365*86400000).toISOString().slice(0, 10), R = {};
   ['a', 'm'].forEach(t => { const L = V.filter(x => x.t === t && x.d > deb); R[t] = L.length ? { pm: Math.round(med(L.map(x => x.pm))), n: L.length, s: Math.round(med(L.map(x => x.s))), bas: Math.round(med(L.map(x => x.pm).filter((v, i, A) => v <= med(A)))), haut: Math.round(med(L.map(x => x.pm).filter((v, i, A) => v >= med(A)))) } : null; });
   return { code, at: Date.now(), der: fin, s: S, r: R, n: V.length };
+}
+
+// 11/11 : avions en vol dans le monde (OpenSky Network, accès gratuit sans compte : 100 relevés par jour au plus). L'appli n'a pas le
+// droit de le lire directement. Moyenne par jour de Paris de tous les relevés de la journée (le robot passe à toute heure).
+async function avionsReleve(p){
+  // OpenSky refuse les demandes qui se présentent comme un navigateur (erreur 503) : le robot dit son vrai nom
+  const r = await fetch('https://opensky-network.org/api/states/all', { headers: { 'user-agent': 'carnet-robot' }, signal: AbortSignal.timeout(60000) }); if(!r.ok) throw new Error('OpenSky ' + r.status);
+  const d = await r.json(), S = (d && d.states) || [];
+  const n = S.filter(x => x && x[8] === false).length; if(n < 1000) throw new Error('OpenSky : trop peu d\'avions (' + n + ')');
+  const j = jourParis(Date.now()), h = { ...((p && p.h) || {}) }, x = h[j] || [0, 0]; h[j] = [x[0] + n, x[1] + 1];
+  return { h: garder(h, 1100), der: { t: Date.now(), n } };
+}
+// 11/11 : consommation d'électricité de la France et de l'Allemagne (Energy-Charts, Fraunhofer ISE ; moyenne de la journée en GW).
+// Premier passage : l'historique est rattrapé depuis 2019, 3 mois par pays et par passage ; ensuite, les derniers jours seulement.
+async function elecReleve(p){
+  const o = { j: { fr: {}, de: {}, ...((p && p.j) || {}) } }, auj = new Date();
+  for(const pays of ['fr', 'de']){
+    const J = { ...(o.j[pays] || {}) }, ks = Object.keys(J).sort(), deb = ks[0], fin = ks[ks.length - 1], plages = [];
+    const mois = (y, m) => [new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10), new Date(Date.UTC(y, m + 1, 0)).toISOString().slice(0, 10)];
+    if(fin) plages.push([new Date(Date.parse(fin) - 3*86400000).toISOString().slice(0, 10), auj.toISOString().slice(0, 10)]);
+    else { const t = new Date(Date.UTC(auj.getUTCFullYear(), auj.getUTCMonth(), 1)); plages.push(mois(t.getUTCFullYear(), t.getUTCMonth())); }
+    // rattrapage vers le passé : jusqu'au 1er janvier 2019
+    let y = deb ? +deb.slice(0, 4) : auj.getUTCFullYear(), m = deb ? +deb.slice(5, 7) - 1 : auj.getUTCMonth();
+    for(let k = 0; k < 3 && (!deb || deb > '2019-01-01'); k++){ m--; if(m < 0){ m = 11; y--; } if(y < 2019) break; plages.push(mois(y, m)); }
+    for(const [a, b] of plages){
+      const d = JSON.parse(await lire(`https://api.energy-charts.info/public_power?country=${pays}&start=${a}&end=${b}`)), L = (d.production_types || []).find(x => x.name === 'Load');
+      if(!L || !Array.isArray(d.unix_seconds)) throw new Error('Energy-Charts : format changé');
+      const S = {}; d.unix_seconds.forEach((t, i) => { const v = L.data[i]; if(v == null || !isFinite(v)) return; const k = jourParis(t*1000); (S[k] = S[k] || [0, 0]); S[k][0] += v; S[k][1]++; });
+      Object.entries(S).forEach(([k, [s, n]]) => { if(n >= 80) J[k] = Math.round(s/n/100)/10; }); // journée assez complète (≥ 20 h sur 24) ; MW → GW
+    }
+    o.j[pays] = J;
+  }
+  o.plein = ['fr', 'de'].every(p => { const k = Object.keys(o.j[p]).sort()[0]; return k && k <= '2019-01-02'; });
+  return o;
 }
