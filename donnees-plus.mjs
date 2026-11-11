@@ -308,7 +308,9 @@ async function elecReleve(p){
       const d = JSON.parse(await lire(`https://api.energy-charts.info/public_power?country=${pays}&start=${a}&end=${b}`)), L = (d.production_types || []).find(x => x.name === 'Load');
       if(!L || !Array.isArray(d.unix_seconds)) throw new Error('Energy-Charts : format changé');
       const S = {}; d.unix_seconds.forEach((t, i) => { const v = L.data[i]; if(v == null || !isFinite(v)) return; const k = jourParis(t*1000); (S[k] = S[k] || [0, 0]); S[k][0] += v; S[k][1]++; });
-      Object.entries(S).forEach(([k, [s, n]]) => { if(n >= 80) J[k] = Math.round(s/n/100)/10; }); // journée assez complète (≥ 20 h sur 24) ; MW → GW
+      // journée assez complète (≥ 20 h sur 24) ; le pas varie selon les années (1 h pour la France avant 2026, 15 min ensuite) ; MW → GW
+      const pas = d.unix_seconds.length > 1 ? Math.max(60, d.unix_seconds[1] - d.unix_seconds[0]) : 900, mini = Math.floor(20*3600/pas);
+      Object.entries(S).forEach(([k, [s, n]]) => { if(n >= mini) J[k] = Math.round(s/n/100)/10; });
     }
     o.j[pays] = J;
   }
