@@ -286,7 +286,11 @@ async function avionsReleve(p){
   const d = await r.json(), S = (d && d.states) || [];
   const n = S.filter(x => x && x[8] === false).length; if(n < 1000) throw new Error('OpenSky : trop peu d\'avions (' + n + ')');
   const j = jourParis(Date.now()), h = { ...((p && p.h) || {}) }, x = h[j] || [0, 0]; h[j] = [x[0] + n, x[1] + 1];
-  return { h: garder(h, 1100), der: { t: Date.now(), n } };
+  // 11/11 : échantillon de positions pour la carte animée de l'appli (1 avion sur 3, au plus 3 000) : position, cap et vitesse
+  // seulement — ni nom de vol ni immatriculation. L'appli fait avancer chaque avion selon son cap et sa vitesse depuis ce relevé.
+  const V = S.filter(a => a && a[8] === false && a[5] != null && a[6] != null && a[9] > 30 && a[10] != null), pas = Math.max(1, Math.ceil(V.length / 3000));
+  const pos = V.filter((a, i) => i % pas === 0).map(a => [Math.round(a[6]*100)/100, Math.round(a[5]*100)/100, Math.round(a[10]), Math.round(a[9])]);
+  return { h: garder(h, 1100), der: { t: Date.now(), n }, pos: { t: (d.time || Math.floor(Date.now()/1000))*1000, a: pos } };
 }
 // 11/11 : consommation d'électricité de la France et de l'Allemagne (Energy-Charts, Fraunhofer ISE ; moyenne de la journée en GW).
 // Premier passage : l'historique est rattrapé depuis 2019, 3 mois par pays et par passage ; ensuite, les derniers jours seulement.
