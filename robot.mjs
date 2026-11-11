@@ -31,7 +31,7 @@ let prev = null;
 // 17/10 : un état présent mais illisible arrête le robot (avant, il repartait de zéro et écrasait tout l'historique)
 if(existsSync('site/data.enc')){ try{ prev = JSON.parse(await dechiffre(key, readFileSync('site/data.enc', 'utf8'))); }catch(e){ say('état précédent illisible : passage arrêté pour ne rien effacer'); process.exit(1); } }
 // tes données personnelles (stock de métaux…) : lues seulement pour calculer la valeur du jour, jamais recopiées en clair
-const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule|temp_exclus|temp_util|pieces_choix|pieces_sites|pieces_cibles|fisc_dates|pro_dessins)/; // 16/10 : + ta règle pour les actions, tes choix d'indicateurs comptés dans les températures
+const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule|temp_exclus|temp_util|pieces_choix|pieces_sites|pieces_cibles|fisc_dates|pro_dessins|repl_demande)/; // 16/10 : + ta règle pour les actions, tes choix d'indicateurs comptés dans les températures
 let perso = {};
 if(existsSync('coffre.enc')){ try{ perso = JSON.parse(await dechiffre(key, readFileSync('coffre.enc', 'utf8'))).data || {}; }catch(e){ say('coffre illisible : passage arrêté'); process.exit(1); } }
 let subs = [];
