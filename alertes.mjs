@@ -43,12 +43,12 @@ export function enregistrer(H, st){
   // 09/10 (n°10) : bulletin du matin, préparé au premier passage après 6 h (heure de Paris)
   if(st.matin && st.matin.length && parisNow().hour >= 6 && (!H.matin || H.matin.date !== date)) H.matin = { date, at: Date.now(), lines: st.matin };
   if(st.bul){ H.bul = { date, notes: st.bul }; H.bulHist = H.bulHist || {}; H.bulHist[date.slice(0, 7)] = st.bul; } // dernier bulletin de notes (n°10) + 09/10 : notes de chaque mois
-  // 09/10 (n°9) : santé des sources — par jour, nombre de passages et échecs de chaque source (35 derniers jours)
+  // 09/10 (n°9) : santé des sources — par jour, nombre de passages et échecs de chaque source (95 derniers jours depuis le 16/11 : page d'état sur 90 jours)
   if(st.allSrc && st.allSrc.length){
     const S = H.sante = H.sante || { jours:{}, vu:{} }; S.der = S.der || {}; const j = S.jours[date] = S.jours[date] || { n: 0, f: {} };
     j.n++; (st.fails || []).forEach(n => { j.f[n] = (j.f[n] || 0) + 1; });
     st.allSrc.forEach(n => { if(!S.vu[n]) S.vu[n] = date; S.der[n] = date; });
-    const lim = new Date(Date.now() - 35*86400000).toISOString().slice(0, 10); Object.keys(S.jours).forEach(d => { if(d < lim) delete S.jours[d]; });
+    const lim = new Date(Date.now() - 95*86400000).toISOString().slice(0, 10); Object.keys(S.jours).forEach(d => { if(d < lim) delete S.jours[d]; });
   }
   // 17/10 : journal des verdicts « Que faire ? » de la liste de suivi (un relevé à chaque changement, avec le prix du jour),
   // pour le bulletin de notes du Carnet ; st.wl absent = mesure impossible ce passage-ci, on ne note rien
