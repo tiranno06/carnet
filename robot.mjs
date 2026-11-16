@@ -201,6 +201,7 @@ try{
   etape = {}; const durees = [];
   for(const tab of ['crypto', 'cross', 'mymetals', 'france', 'traditional']){
     const d0 = Date.now(); await page.evaluate(t => { try{ switchTab(t); }catch(e){} }, tab);
+    await page.waitForTimeout(4000); // 16/11 : le temps que l'onglet lance ses demandes (sinon il était quitté aussitôt)
     await idle(5000, 45000);
     await page.evaluate(() => { try{ window.__svHistLast = {}; renderSimpleViews(true); }catch(e){} });
     durees.push(`${tab} ${Math.round((Date.now() - d0)/1000)} s, ${etapeBilan()}`);
