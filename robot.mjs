@@ -110,10 +110,15 @@ try{
   const SITES_PUBLICS = /(yahoo|stlouisfed|treasury|workers\.dev|coingecko|alternative\.me|mempool|blockchain|llama|okx|deribit|coinbase|binance|ecb\.europa|insee|bundesbank|oecd|bis\.org|multpl|finra|cboe|cftc|polymarket|gdelt|githubusercontent|arcgis|imf\.org|energy-charts|wikimedia|tradingeconomics|nasa|cdnjs|jsdelivr|bgeometrics|colintalkscrypto|matteoiacoviello|westmetall|stooq|tiingo|financialmodelingprep|eodhd|twelvedata|allorigins|corsproxy|codetabs|jina)/i;
   let etape = {}; const hote = u => { try{ const h = new URL(u).hostname; const m = h.match(SITES_PUBLICS); return m ? m[1].toLowerCase() : 'autres'; }catch(e){ return 'autres'; } };
   const etapeBilan = () => { const L = Object.entries(etape).sort((a, b) => b[1] - a[1]), n = L.reduce((a, x) => a + x[1], 0); etape = {}; return `${n} demandes` + (L.length ? ' (' + L.slice(0, 4).map(([h, c]) => `${h} ${c}`).join(', ') + ')' : ''); };
-  page.on('request', q => { inflight++; lastNet = Date.now(); const h = hote(q.url()); etape[h] = (etape[h] || 0) + 1; });
-  const done = () => { inflight = Math.max(0, inflight-1); lastNet = Date.now(); };
+  // 16/11 : chaque demande en cours est suivie une par une. Avant, un simple compteur : une seule demande qui ne finissait jamais
+  // (flux continu, demande abandonnée par la page) le laissait au-dessus de zéro, et CHAQUE onglet attendait alors le maximum de 45 s
+  // (5 × 45 s perdus par passage). Une demande en cours depuis plus de 20 s est maintenant considérée comme bloquée et ne retient plus le robot.
+  const enCours = new Map(); let bloquees = {};
+  page.on('request', q => { inflight++; lastNet = Date.now(); enCours.set(q, Date.now()); const h = hote(q.url()); etape[h] = (etape[h] || 0) + 1; });
+  const done = q => { inflight = Math.max(0, inflight-1); lastNet = Date.now(); enCours.delete(q); };
   page.on('requestfinished', done); page.on('requestfailed', done);
-  const idle = async (quiet, max) => { const s = Date.now(); while(Date.now()-s < max){ if(inflight===0 && Date.now()-lastNet > quiet) return; await page.waitForTimeout(500); } };
+  const actives = () => { const t = Date.now(); let n = 0; for(const [q, t0] of enCours){ if(t - t0 < 20000) n++; else { const h = hote(q.url()); bloquees[h] = (bloquees[h] || 0) + 1; enCours.delete(q); } } return n; };
+  const idle = async (quiet, max) => { const s = Date.now(); while(Date.now()-s < max){ if(actives()===0 && Date.now()-lastNet > quiet) return; await page.waitForTimeout(500); } };
 
   // 1) on remet l'état de l'heure précédente (caches, historiques) avant d'ouvrir l'application
   await page.goto(base + '/vide');
@@ -200,7 +205,7 @@ try{
     await page.evaluate(() => { try{ window.__svHistLast = {}; renderSimpleViews(true); }catch(e){} });
     durees.push(`${tab} ${Math.round((Date.now() - d0)/1000)} s, ${etapeBilan()}`);
   }
-  say('onglets : ' + durees.join(' · ')); const dPv = Date.now();
+  say('onglets : ' + durees.join(' · ') + (Object.keys(bloquees).length ? ' · demandes restées sans réponse plus de 20 s : ' + Object.entries(bloquees).map(([h, c]) => `${h} ${c}`).join(', ') : '')); const dPv = Date.now();
   // onglet Prévision : probabilités calculées ici pour que la page s'ouvre déjà avec
   await page.evaluate(() => { try{ if(typeof pvCompute==='function') pvCompute(false); }catch(e){} });
   await page.waitForFunction(() => !window.__pv || window.__pv.done, null, { timeout: 240000, polling: 2000 }).catch(() => say('prévision : pas finie à temps'));
