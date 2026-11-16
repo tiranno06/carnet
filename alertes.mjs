@@ -64,6 +64,7 @@ export function enregistrer(H, st){
 
 const AVIS = { publication: ["🛠️ Carnet : une mise à jour n'a pas pu être publiée", "L'ancienne version reste en ligne et fonctionne. Claude est prévenu."],
   audit: ["🩺 Carnet : la vérification de Claude a trouvé quelque chose", 'Ouvre Claude pour lire le bilan.'], action: ['💬 Carnet : Claude a besoin de ta réponse', 'Une tâche programmée attend ta décision : ouvre Claude.'],
+  checkup: ['🩺 Carnet : le contrôle de la semaine a trouvé un problème', 'Rien à faire tout de suite : dis-le à Claude à ta prochaine session, il a le détail.'],
   test: ['🔔 Carnet : test des avis de Claude réussi', 'Les avis de Claude arrivent bien sur cet appareil. Rien à faire.'] };
 export function alertes(H, st, subs){
   const A = H.alerts = H.alerts || {}; const now = parisNow();
