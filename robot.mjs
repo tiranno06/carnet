@@ -105,7 +105,12 @@ try{
   const page = await ctx.newPage();
   page.on('dialog', d => d.dismiss().catch(() => {}));
   let inflight = 0, lastNet = Date.now();
-  page.on('request', () => { inflight++; lastNet = Date.now(); });
+  // 16/11 : mesure de chaque étape (durée, nombre de demandes, sites publics les plus appelés) pour voir ce qui ralentit le robot ;
+  // seuls des sites de données publics connus sont nommés, jamais un site ajouté par le propriétaire
+  const SITES_PUBLICS = /(yahoo|stlouisfed|treasury|workers\.dev|coingecko|alternative\.me|mempool|blockchain|llama|okx|deribit|coinbase|binance|ecb\.europa|insee|bundesbank|oecd|bis\.org|multpl|finra|cboe|cftc|polymarket|gdelt|githubusercontent|arcgis|imf\.org|energy-charts|wikimedia|tradingeconomics|nasa|cdnjs|jsdelivr|bgeometrics|colintalkscrypto|matteoiacoviello|westmetall|stooq|tiingo|financialmodelingprep|eodhd|twelvedata|allorigins|corsproxy|codetabs|jina)/i;
+  let etape = {}; const hote = u => { try{ const h = new URL(u).hostname; const m = h.match(SITES_PUBLICS); return m ? m[1].toLowerCase() : 'autres'; }catch(e){ return 'autres'; } };
+  const etapeBilan = () => { const L = Object.entries(etape).sort((a, b) => b[1] - a[1]), n = L.reduce((a, x) => a + x[1], 0); etape = {}; return `${n} demandes` + (L.length ? ' (' + L.slice(0, 4).map(([h, c]) => `${h} ${c}`).join(', ') + ')' : ''); };
+  page.on('request', q => { inflight++; lastNet = Date.now(); const h = hote(q.url()); etape[h] = (etape[h] || 0) + 1; });
   const done = () => { inflight = Math.max(0, inflight-1); lastNet = Date.now(); };
   page.on('requestfinished', done); page.on('requestfailed', done);
   const idle = async (quiet, max) => { const s = Date.now(); while(Date.now()-s < max){ if(inflight===0 && Date.now()-lastNet > quiet) return; await page.waitForTimeout(500); } };
@@ -188,15 +193,18 @@ try{
   }catch(e){ say('or et dirigeants : relevé impossible'); }
   })().catch(e => say('relevés : ' + String(e && e.message || e).slice(0, 80)));
   await page.evaluate(() => { try{ if(localStorage.getItem('mt_ultra_simple')==='1') applyUltraSimpleView(false); }catch(e){} }); // sinon switchTab ne fait rien
+  etape = {}; const durees = [];
   for(const tab of ['crypto', 'cross', 'mymetals', 'france', 'traditional']){
-    await page.evaluate(t => { try{ switchTab(t); }catch(e){} }, tab);
+    const d0 = Date.now(); await page.evaluate(t => { try{ switchTab(t); }catch(e){} }, tab);
     await idle(5000, 45000);
     await page.evaluate(() => { try{ window.__svHistLast = {}; renderSimpleViews(true); }catch(e){} });
+    durees.push(`${tab} ${Math.round((Date.now() - d0)/1000)} s, ${etapeBilan()}`);
   }
+  say('onglets : ' + durees.join(' · ')); const dPv = Date.now();
   // onglet Prévision : probabilités calculées ici pour que la page s'ouvre déjà avec
   await page.evaluate(() => { try{ if(typeof pvCompute==='function') pvCompute(false); }catch(e){} });
   await page.waitForFunction(() => !window.__pv || window.__pv.done, null, { timeout: 240000, polling: 2000 }).catch(() => say('prévision : pas finie à temps'));
-  say('prévision calculée'); const dureePv = Math.round((Date.now() - t0)/1000);
+  say(`prévision calculée en ${Math.round((Date.now() - dPv)/1000)} s, ${etapeBilan()}`); const dureePv = Math.round((Date.now() - t0)/1000);
   // 16/10 : tests sur le passé recalculés ici une fois par semaine (le plus ancien d'abord, un seul par passage,
   // 3 min au plus) : les appareils les reçoivent tout prêts au lieu de les refaire eux-mêmes
   try{
@@ -327,9 +335,11 @@ try{
   // le résultat, gardé dans mt_fred_repl, est repris par la page) — ici les sites répondent sans passerelle
   // 24/10 : + veille active : fiches FRED relues (toutes les 3 h par série) ; une série retirée ou plus mise à jour par la Fed
   // est recherchée tout de suite, sans attendre le seuil de retard
+  etape = {}; const dVeille = Date.now();
   try{ const R = await page.evaluate(async () => { let n = 0, v = null; try{ v = await fredVeille(); }catch(e){} try{ getStaleDataList(); for(const p of Object.values(window.__fredReplBusy || {})){ try{ if(await Promise.race([p, new Promise(r => setTimeout(r, 60000))])) n++; }catch(e){} } }catch(e){} return { n, lus: v ? v.lus : 0, sus: v ? v.suspectes : [] }; });
     if(R.sus.length) say(`veille FRED : ${R.lus} fiche(s) relue(s), série(s) retirée(s) ou plus mise(s) à jour par la Fed : ${R.sus.join(', ')}`);
     if(R.n) say(`${R.n} série(s) retirée(s) remplacée(s) automatiquement`); }catch(e){}
+  say(`veille de la Fed et courbes préparées en ${Math.round((Date.now() - dVeille)/1000)} s, ${etapeBilan()}`);
   await releves; // 24/10 : relevés lancés en parallèle plus haut (pièces, or, dirigeants, données en plus)
   // 3) on récupère l'état (filtré) et on le chiffre
   const st = await page.evaluate(async reSrc => {
