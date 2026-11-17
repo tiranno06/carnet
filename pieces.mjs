@@ -201,3 +201,30 @@ export async function verifierLivraison(sites, ancien = {}, max = 2){
   }
   return { port: out, n: aFaire.length };
 }
+
+// ==== 17/11 (demande du propriétaire) : frais de livraison relevés sur les pages publiques des pièces de bullion-sniper.fr ====
+// (sitemap, puis /pieces-or/…, /pieces-argent/…, /lingots-or/…, /lingots-argent/… ; robots.txt respecté ; leur API privée n'est jamais
+// utilisée). 8 pages par passage, une par seconde ; une tournée complète environ toutes les 2 semaines. Pour chaque boutique : les frais
+// observés pour une pièce, avec le prix de l'offre (les frais de certaines boutiques montent avec le montant).
+const BS_HOTES = { 'abacor': 'abacor.fr', 'acheter-or-argent': 'acheter-or-argent.fr', 'achat or et argent': 'achat-or-et-argent.fr', 'aucoffre': 'aucoffre.com', 'bdor': 'bdor.fr', 'bullionbypost': 'bullionbypost.fr', 'cgb': 'cgb.fr',
+  'change de la bourse': 'changedelabourse.com', 'change richelieu': 'changerichelieu.fr', 'change vivienne': 'changevivienne.com', 'comptoir des tuileries': 'cdt.fr', 'gold avenue': 'goldavenue.com', 'goldmarket': 'goldmarket.fr',
+  'goldreserve': 'goldreserve.fr', 'goldsilver': 'goldsilver.be', 'goldunion': 'goldunion.fr', 'heubachedelmetalle': 'heubach-edelmetalle.de', 'heubach edelmetalle': 'heubach-edelmetalle.de', 'lcdor': 'lcdor.fr', 'les métaux précieux': 'lesmetauxprecieux.com',
+  'merson': 'merson.fr', 'metal market': 'metalmarket.eu', 'mon lingot': 'monlingot.fr', 'numiscorner': 'numiscorner.com', 'or & change': 'or-et-change.fr', 'or.fr': 'or.fr', 'or connect': 'or-connect.fr', 'or investissement': 'or-investissement.fr',
+  'orobel': 'orobel.biz', "orpaill'or": 'orpaillor.fr', 'parlons monnaies': 'parlonsmonnaies.fr', 'pièces or': 'piecesor.fr', 'stonex bullion': 'stonexbullion.com', 'suffren numismatique': 'suffren-numismatique.com', 'gold & forex': 'gfigold.lu' };
+export async function releveFraisComparateur(prev, parPassage = 8){
+  const p = { ...(prev || {}) }, maint = Date.now(); if(p.at && maint - p.at < 14*86400000 && !p.enCours) return { p, n: 0 };
+  const RR = await reglesRobots('bullion-sniper.fr');
+  if(!p.enCours){ const sm = await lire('https://bullion-sniper.fr/sitemap.xml'); p.pages = [...sm.matchAll(/<loc>([^<]+)<\/loc>/g)].map(m => m[1]).filter(u => /\/(pieces-or|pieces-argent|lingots-or|lingots-argent)\//.test(u) && autorise(RR, u)); p.i = 0; p.obs = {}; p.enCours = true; }
+  let n = 0;
+  while(p.i < p.pages.length && n < parPassage){ const u = p.pages[p.i++]; n++;
+    try{ const t = NET(await lire(u));
+      for(const m of t.matchAll(/(.{0,60}?) Prime -?[\d.]+% Prix unitaire ([\d.]+) € Frais de port ([\d.]+) € Total/g)){ const debut = m[1].toLowerCase().replace(/’/g, "'");
+        const cle = Object.keys(BS_HOTES).sort((a, b) => b.length - a.length).find(k => debut.endsWith(k)); if(!cle) continue; const h = BS_HOTES[cle], o = (p.obs[h] = p.obs[h] || []);
+        const x = [Math.round(+m[2]), +m[3]]; if(!o.some(y => y[0] === x[0] && y[1] === x[1])) o.push(x); } }catch(e){}
+    await new Promise(r => setTimeout(r, 1000)); }
+  if(p.i >= p.pages.length){ const data = {};
+    for(const [h, o] of Object.entries(p.obs)){ o.sort((a, b) => a[0] - b[0]); const fr = new Set(o.map(x => x[1])); if(fr.size === 1) data[h] = { f: o[0][1] }; else { const pas = Math.max(1, Math.floor(o.length/12)); data[h] = { obs: o.filter((x, i) => i % pas === 0).slice(0, 14) }; } }
+    if(Object.keys(data).length >= 5){ p.data = data; p.at = maint; } else { p.at = maint; p.err = 'trop peu de boutiques lues'; }
+    p.enCours = false; delete p.pages; delete p.obs; delete p.i; }
+  return { p, n };
+}

@@ -6,7 +6,7 @@ import http from 'node:http';
 import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
-import { relevePieces, releveSitesUtilisateur, verifierLivraison } from './pieces.mjs';
+import { relevePieces, releveSitesUtilisateur, verifierLivraison, releveFraisComparateur } from './pieces.mjs';
 import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux, releveImmo } from './donnees-plus.mjs';
 
 const t0 = Date.now();
@@ -177,7 +177,7 @@ try{
           nS++; say(`pièces — site personnel n°${nS} : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); // jamais le nom du site : le journal est public
         }
       }
-      P.sig = conf ? conf.sig : null; if(avant && avant.port) P.port = avant.port;
+      P.sig = conf ? conf.sig : null; if(avant && avant.port) P.port = avant.port; if(avant && avant.portBs) P.portBs = avant.portBs;
       if(P.ok || nS){ await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P)); }
       say(`prix des pièces : ${P.ok} relevé(s) chez les marchands intégrés, ${P.ko} manquant(s), ${nS} site(s) personnel(s) lu(s)`);
     }
@@ -187,6 +187,10 @@ try{
       if(P && conf){ const t0 = Date.now(), R = await verifierLivraison([...(conf.integres || []), ...(conf.sites || [])], P.port || {}, 2);
         if(R.n){ P.port = R.port; await page.evaluate(v => localStorage.setItem('mt_pieces_prix', v), JSON.stringify(P)); const ch = Object.values(R.port).filter(x => x.change && Date.now() - x.at < 600000).length;
           say(`frais de livraison : ${R.n} site(s) vérifié(s) en ${Math.round((Date.now() - t0)/1000)} s${ch ? `, ${ch} changement(s)` : ''}`); } } }catch(e){ say('frais de livraison : vérification impossible'); }
+    // 17/11 : frais relevés sur les pages publiques du comparateur (8 pages par passage, tournée environ toutes les 2 semaines)
+    try{ const P = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_prix') || 'null'); }catch(e){ return null; } });
+      if(P){ const t0 = Date.now(), R = await releveFraisComparateur(P.portBs, 8); if(R.n){ P.portBs = R.p; await page.evaluate(v => localStorage.setItem('mt_pieces_prix', v), JSON.stringify(P));
+        say(`frais de livraison (comparateur) : ${R.n} page(s) lue(s) en ${Math.round((Date.now() - t0)/1000)} s${R.p.enCours ? '' : `, tournée terminée (${Object.keys(R.p.data || {}).length} boutiques)`}`); } } }catch(e){ say('frais de livraison (comparateur) : relevé impossible'); }
   }catch(e){ say('prix des pièces : relevé impossible'); }
   // 17/10 : or des banques centrales (FMI) et des ETF (GLD) une fois par jour ; achats des dirigeants toutes les 6 h
   try{
