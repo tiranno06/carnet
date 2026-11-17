@@ -189,7 +189,7 @@ try{
     try{ const N = await releveNouveaux(O.nv); if(JSON.stringify(N.o) !== JSON.stringify(O.nv || {})){ O.nv = N.o; neuf = true; } if(N.err.length) say('nouvelles données : ' + N.err.join(' ; ')); }catch(e){ say('nouvelles données : relevé impossible'); }
     if(neuf) await ecrit('mt_or_plus', O);
     // 11/11 : prix de l'immobilier dans la commune choisie (donnée personnelle : jamais nommée dans ce journal public)
-    try{ const lieu = perso.mt_immo_lieu ? JSON.parse(perso.mt_immo_lieu) : null; if(lieu && lieu.code){ const avant = await lit('mt_immo_stats'), S = await releveImmo(lieu.code, avant && avant.code === lieu.code ? avant : null); if(S !== avant){ await ecrit('mt_immo_stats', S); say('immobilier : ventes relues'); } } }catch(e){ say('immobilier : relevé impossible (' + String(e.message || '').replace(/\d{5}/g, '…').slice(0, 60) + ')'); }
+    try{ const lieu = perso.mt_immo_lieu ? JSON.parse(perso.mt_immo_lieu) : null; if(lieu && lieu.code){ const avant = await lit('mt_immo_stats'), forcer = avant && +perso.mt_immo_forcer > (avant.at || 0); if(forcer) say('immobilier : relecture demandée depuis l\'appli'); const S = await releveImmo(lieu.code, avant && avant.code === lieu.code && !forcer ? avant : null); if(S !== avant){ await ecrit('mt_immo_stats', S); say('immobilier : ventes relues'); } } }catch(e){ say('immobilier : relevé impossible (' + String(e.message || '').replace(/\d{5}/g, '…').slice(0, 60) + ')'); }
     const I = await lit('mt_inities');
     if(!I || Date.now() - I.at > 6*3600000){
       try{ await ecrit('mt_inities', await releveInitiesMarche(I)); }catch(e){ say('dirigeants (marché) : ' + e.message); }
