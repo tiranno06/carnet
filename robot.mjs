@@ -6,7 +6,7 @@ import http from 'node:http';
 import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
-import { relevePieces, releveSitesUtilisateur } from './pieces.mjs';
+import { relevePieces, releveSitesUtilisateur, verifierLivraison } from './pieces.mjs';
 import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux, releveImmo } from './donnees-plus.mjs';
 
 const t0 = Date.now();
@@ -177,10 +177,16 @@ try{
           nS++; say(`pièces — site personnel n°${nS} : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); // jamais le nom du site : le journal est public
         }
       }
-      P.sig = conf ? conf.sig : null;
+      P.sig = conf ? conf.sig : null; if(avant && avant.port) P.port = avant.port;
       if(P.ok || nS){ await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P)); }
       say(`prix des pièces : ${P.ok} relevé(s) chez les marchands intégrés, ${P.ko} manquant(s), ${nS} site(s) personnel(s) lu(s)`);
     }
+    // 17/11 : frais de livraison de chaque site vérifiés tout seuls (au plus 2 sites par passage, chacun environ tous les 14 jours) ;
+    // gardés dans mt_pieces_prix.port (déjà conservé d'un passage à l'autre et envoyé aux appareils). Jamais le nom du site dans ce journal.
+    try{ const P = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_prix') || 'null'); }catch(e){ return null; } });
+      if(P && conf){ const t0 = Date.now(), R = await verifierLivraison([...(conf.integres || []), ...(conf.sites || [])], P.port || {}, 2);
+        if(R.n){ P.port = R.port; await page.evaluate(v => localStorage.setItem('mt_pieces_prix', v), JSON.stringify(P)); const ch = Object.values(R.port).filter(x => x.change && Date.now() - x.at < 600000).length;
+          say(`frais de livraison : ${R.n} site(s) vérifié(s) en ${Math.round((Date.now() - t0)/1000)} s${ch ? `, ${ch} changement(s)` : ''}`); } } }catch(e){ say('frais de livraison : vérification impossible'); }
   }catch(e){ say('prix des pièces : relevé impossible'); }
   // 17/10 : or des banques centrales (FMI) et des ETF (GLD) une fois par jour ; achats des dirigeants toutes les 6 h
   try{

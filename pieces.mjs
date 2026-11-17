@@ -155,3 +155,49 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
   return res;
 }
 const hote = u => { try{ return new URL(u).hostname.replace(/^www\./, ''); }catch(e){ return ''; } };
+
+// ==== 17/11 (demande du propriétaire) : vérification automatique des frais de livraison, environ 2 fois par mois et par site ====
+// À chaque passage, au plus 2 sites dont la dernière vérification a plus de 14 jours : la page d'accueil, puis jusqu'à 3 pages dont le lien
+// parle de livraison, frais de port, expédition ou conditions de vente (robots.txt respecté). On garde les frais pour une commande en France
+// et le seuil de livraison offerte, avec la phrase du site qui le dit (preuve, affichée dans l'appli). Rien n'est inventé : sans phrase claire,
+// le site reste « non vérifié ».
+const ENT = { agrave: 'à', acirc: 'â', eacute: 'é', egrave: 'è', ecirc: 'ê', euml: 'ë', icirc: 'î', iuml: 'ï', ocirc: 'ô', ugrave: 'ù', ucirc: 'û', ccedil: 'ç', Eacute: 'É', Agrave: 'À', euro: '€', nbsp: ' ', amp: '&', rsquo: "'", lsquo: "'", laquo: '«', raquo: '»', quot: '"' };
+const NET = h => String(h).replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&([a-zA-Z]+);/g, (m, n) => ENT[n] || m).replace(/&#(\d+);/g, (m, n) => String.fromCharCode(+n)).replace(/\s+/g, ' ');
+const MONTANT = '\\(?\\s*(\\d{1,3}(?:[ .\\u00a0\\u202f]\\d{3})*(?:[,.]\\d{1,2})?)\\s?(?:€|euros?|eur\\b)';
+const nombre = t => parseFloat(String(t).replace(/[ .  ](?=\d{3}\b)/g, '').replace(',', '.'));
+export function lireRegleLivraison(texte){
+  const phrases = NET(texte).split(/(?<=[.!?;])\s+|\s[•●▪]\s/).filter(p => /livraison|frais de port|frais d.envoi|frais d.exp[ée]dition|exp[ée]dition|envoi/i.test(p) && p.length < 400);
+  let f = null, g = null, preuve = null;
+  for(const p of phrases){
+    if(/agence|retrait|en boutique|au comptoir|en magasin|click|sur place|coffre/i.test(p) && !/domicile/i.test(p)) continue; // retrait sur place : pas une livraison
+    if(/frais de garde|de stockage|stockage|garde en coffre|conservation|par mois|\/mois|commission/i.test(p)) continue; // frais de garde du coffre : pas une livraison
+    if(/hors de france|international|[ée]tranger|dom-?tom|outre-mer|suisse|belgique|europe/i.test(p) && !/france m[ée]tropolitaine|en france/i.test(p)) continue;
+    const seuil = p.match(new RegExp('jusqu.(?:à|a)\\s*' + MONTANT + '[^.]{0,30}?(?:gratuite?s?|offerte?s?|offerts?)', 'i')) || p.match(new RegExp('(?:inf[ée]rieure? à|moins de)\\s*' + MONTANT + '[^.]{0,80}?(?:frais|livraison)', 'i')) || p.match(new RegExp('(?:gratuite?s?|offerte?s?|offerts?)[^.]{0,80}?(?:à partir de|dès|au-delà de|au dela de|pour toute commande (?:de plus de|supérieure à|d.un montant supérieur à)|supérieure? à|plus de)\\s*' + MONTANT, 'i'))
+      || p.match(new RegExp('(?:à partir de|dès|au-delà de|au dela de|pour toute commande (?:de plus de|supérieure à)|plus de)\\s*' + MONTANT + '[^.]{0,60}?(?:gratuite?s?|offerte?s?|offerts?)', 'i'));
+    if(seuil && g == null){ g = nombre(seuil[1]); preuve = preuve || p; }
+    if(f == null && /frais|co[uû]t|tarif|prix|forfait|factur|livraison [àa] domicile|standard|colissimo|chronopost|par commande|ttc/i.test(p)){
+      // le montant doit suivre de près un mot de livraison (sinon un prix de produit voisin serait pris pour les frais)
+      const m = [...p.matchAll(new RegExp('(?:frais|livraison|exp[ée]dition|envoi|colissimo|chronopost|standard|forfait)[^€]{0,70}?(?:frais|prix|co[uû]t|tarif|forfait|est de|sont de|s.[ée]l[eè]v|standard|domicile|colissimo|chronopost|factur)[^€]{0,40}?' + MONTANT + '|(?:frais|prix|co[uû]t|tarif)[^€]{0,25}?' + MONTANT, 'gi'))].map(x => ({ v: nombre(x[1] || x[2]) })).filter(x => x.v > 0 && x.v <= 150 && (!seuil || Math.abs(x.v - g) > 0.01));
+      if(m.length){ f = m[0].v; preuve = p; }
+    }
+    if(f == null && /livraison (?:est |toujours )?(?:gratuite|offerte)|frais de port (?:sont )?offerts|livraison offerte/i.test(p) && !seuil && !new RegExp(MONTANT, 'i').test(p)){ f = 0; preuve = preuve || p; }
+  }
+  if(f === 0 && g != null) f = null; // « livraison gratuite » quelque part + un seuil : la gratuité ne vaut qu'au-dessus du seuil
+  return f == null && g == null ? null : { f: f == null ? null : Math.round(f*100)/100, g: g || null, preuve: preuve ? preuve.trim().slice(0, 240) : null };
+}
+export async function verifierLivraison(sites, ancien = {}, max = 2){
+  const out = { ...ancien }, maint = Date.now(), aFaire = sites.filter(s => { const h = hote(s.url); return h && (!out[h] || maint - (out[h].at || 0) > 14*86400000); }).slice(0, max);
+  for(const S of aFaire){ const h = hote(S.url), avant = out[h];
+    try{ const RR = await reglesRobots(h); if(!autorise(RR, S.url)) throw new Error('le site refuse les robots');
+      const accueil = await lire(S.url), base = new URL(S.url), vus = new Set(), pages = [];
+      for(const m of accueil.matchAll(/<a\b[^>]*href="([^"#]+)"[^>]*>([\s\S]{0,120}?)<\/a>/gi)){ let u; try{ u = new URL(m[1], base).href; }catch(e){ continue; }
+        if(hote(u) !== h || vus.has(u) || !autorise(RR, u)) continue; const t = (m[1] + ' ' + NET(m[2])).toLowerCase();
+        if(/livraison|frais-de-port|frais de port|exp[ée]dition|shipping|delivery|envoi|cgv|conditions-g[ée]n[ée]rales|conditions g[ée]n[ée]rales/.test(t)){ vus.add(u); pages.push([u, /livraison|port|exp[ée]dition|shipping|delivery/.test(t) ? 0 : 1]); } }
+      pages.sort((a, b) => a[1] - b[1]); let R = null, src = null;
+      for(const [u] of pages.slice(0, 4)){ try{ const r = lireRegleLivraison(await lire(u)); if(r && r.f != null){ R = r; src = u; break; } if(r && !R){ R = r; src = u; } }catch(e){} }
+      if(!R){ const r = lireRegleLivraison(accueil); if(r){ R = r; src = S.url; } }
+      out[h] = R ? { ...R, src, at: maint, change: !!(avant && avant.f != null && R.f != null && (avant.f !== R.f || (avant.g || null) !== (R.g || null))), avantF: avant && avant.f, avantG: avant && avant.g } : { at: maint, err: 'frais non trouvés sur le site', f: avant ? avant.f : null, g: avant ? avant.g : null, preuve: avant ? avant.preuve : null, src: avant ? avant.src : null };
+    }catch(e){ out[h] = { ...(avant || {}), at: maint, err: String(e.message || e).slice(0, 80) }; }
+  }
+  return { port: out, n: aFaire.length };
+}
