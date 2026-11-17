@@ -149,13 +149,17 @@ try{
     const conf = await page.evaluate(() => { try{ return piecesConfigRobot(); }catch(e){ return null; } });
     const complet = !avant || Date.now() - (avant.at || 0) > 6*3600000 || (conf && avant.sig !== conf.sig);
     // sites personnels en échec (hors sites qui bloquent les robots) : nouvel essai au bout d'1 h, sans tout relever
-    const aRefaire = !complet && conf ? conf.sites.filter(x => { let h = ''; try{ h = new URL(x.url).hostname.replace(/^www\./, ''); }catch(e){} const r = (avant.sites || {})[h]; return r && r.err && !/protégé/.test(r.err) && Date.now() - (r.at || 0) > 3600000; }) : [];
+    const hoteDe = x => { try{ return new URL(x.url).hostname.replace(/^www\./, ''); }catch(e){ return ''; } };
+    const aRefaire = !complet && conf ? conf.sites.filter(x => { const r = (avant.sites || {})[hoteDe(x)]; return r && r.err && !/protégé|refuse les robots/.test(r.err) && Date.now() - (r.at || 0) > 3600000; }) : [];
+    // 17/11 : beaucoup de sites (36 boutiques suivies par un comparateur ajoutées) : à chaque passage, en plus, le site le plus anciennement lu
+    // s'il a plus de 8 h (une minute environ) ; ainsi chaque site est relu environ deux fois par jour sans allonger beaucoup le passage
+    if(!complet && conf && !aRefaire.length){ const vieux = conf.sites.map(x => [x, ((avant.sites || {})[hoteDe(x)] || {}).at || 0]).filter(([, t]) => Date.now() - t > 8*3600000).sort((a, b) => a[1] - b[1]); if(vieux.length) aRefaire.push(vieux[0][0]); }
     if(aRefaire.length){
       const P = avant; P.sites = P.sites || {}; let nS = 0;
       const R = await releveSitesUtilisateur(page.context(), { ...conf, sites: aRefaire }, P.sites, 120000);
       for(const [h, r] of Object.entries(R)){ const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
         P.sites[h] = { nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : ((P.sites[h] || {}).offres || []) }; nS++;
-        say(`pièces — nouvel essai d'un site personnel : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); }
+        say(`pièces — site personnel relu : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); }
       await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P));
     }
     if(complet){

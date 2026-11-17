@@ -100,6 +100,23 @@ async function lirePage(ctx, url){
   }finally{ try{ await p.close(); }catch(e){} }
 }
 const MOTS_PIECES = /pi[eè]ce|monnaie|coin|m[uü]nze|gold|silber|silver|\bor\b|argent|napol|souverain|sovereign|kruger|vreneli|lingot|barren|bullion|investissement|anlage|categor|collection|rubrique|boutique|shop|catalog/i;
+// 17/11 : on respecte les règles de chaque site pour les robots (robots.txt, groupe « * ») : un site qui refuse n'est pas lu, et les pages
+// interdites ne sont pas visitées (règle du projet : ne jamais contourner un site qui bloque les robots)
+const REGLES = {};
+async function reglesRobots(h){
+  if(REGLES[h]) return REGLES[h];
+  const R = { interdit: [], permis: [] };
+  try{ const r = await fetch(`https://${h}/robots.txt`, { headers: { 'user-agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(15000) });
+    if(r.status === 401 || r.status === 403) R.interdit.push('/'); // robots.txt refusé : on considère que le site refuse les robots
+    else if(r.ok){ let pourNous = false, vu = false;
+      for(const l of (await r.text()).split(/\r?\n/)){ const m = l.replace(/#.*/, '').trim().match(/^([a-z-]+)\s*:\s*(.*)$/i); if(!m) continue; const k = m[1].toLowerCase(), v = m[2].trim();
+        if(k === 'user-agent'){ if(vu){ pourNous = false; vu = false; } if(v === '*') pourNous = true; continue; }
+        vu = true; if(!pourNous) continue; if(k === 'disallow' && v) R.interdit.push(v); if(k === 'allow' && v) R.permis.push(v); } } }catch(e){}
+  return (REGLES[h] = R); }
+// une règle : début du chemin, « * » = n'importe quoi, « $ » = fin de l'adresse ; la règle la plus longue qui correspond l'emporte
+const regleRe = x => new RegExp('^' + x.replace(/[.+?^{}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\\\$$/, '$').replace(/\$(?!$)/g, '\\$'));
+const autorise = (R, url) => { let p = '/'; try{ const u = new URL(url); p = u.pathname + u.search; }catch(e){} const lg = L => Math.max(-1, ...L.filter(x => { try{ return regleRe(x).test(p); }catch(e){ return false; } }).map(x => x.length));
+  return lg(R.permis) >= lg(R.interdit); };
 export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs = 200000){
   const t0 = Date.now(), res = {}, mots = (conf.mots || []).map(m => m.toLowerCase());
   const sites = [...(conf.sites || [])].sort((a, b) => ((anciens[hote(a.url)] || {}).at || 0) - ((anciens[hote(b.url)] || {}).at || 0));
@@ -108,6 +125,7 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
     if(Date.now() - t0 > budgetMs) break;
     const ts = Date.now(), produits = [], vus = new Set(); let err = null;
     try{
+      const RR = await reglesRobots(h); if(!autorise(RR, S.url)) throw new Error('ce site refuse les robots (robots.txt)');
       const eb = S.url.match(/ebay\.[a-z.]+\/str\/([^/?#]+)/i);
       if(eb){
         // eBay refuse les recherches automatiques mais montre la boutique : on lit ses pages (enchères écartées)
@@ -121,7 +139,7 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
         const file = [S.url], score = l => (mots.some(m => m.split(' ').filter(w => w.length > 3).every(w => (l.t + ' ' + l.u).toLowerCase().includes(w))) ? 5 : 0) + (MOTS_PIECES.test(l.t + ' ' + l.u) ? 1 : 0);
         let n = 0;
         while(file.length && n < 13 && Date.now() - ts < 80000){
-          const u = file.shift(); if(vus.has(u)) continue; vus.add(u); n++;
+          const u = file.shift(); if(vus.has(u) || !autorise(RR, u)) continue; vus.add(u); n++;
           let R; try{ R = await lirePage(ctx, u); }catch(e){ if(n === 1) throw e; continue; }
           R.produits.forEach(p => produits.push(p));
           const nouveaux = R.liens.filter(l => hote(l.u) === h && !vus.has(l.u) && !/panier|cart|compte|account|login|connexion|contact|cgv|mentions|cookie|blog|faq|\.(pdf|jpg|png)$/i.test(l.u)).map(l => ({ ...l, s: score(l) })).filter(l => l.s > 0).sort((a, b) => b.s - a.s);
