@@ -147,7 +147,9 @@ try{
     // tout de suite si la liste des pièces ou des sites a changé
     const avant = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_prix') || 'null'); }catch(e){ return null; } });
     const conf = await page.evaluate(() => { try{ return piecesConfigRobot(); }catch(e){ return null; } });
-    const complet = !avant || Date.now() - (avant.at || 0) > 6*3600000 || (conf && avant.sig !== conf.sig);
+    // 17/11 : bouton « Relever les prix maintenant » de l'appli (mt_pieces_forcer, déposé chiffré dans le coffre) : relevé complet tout de suite
+    const force = !!avant && +perso.mt_pieces_forcer > (avant.at || 0); if(force) say('prix des pièces : relevé demandé depuis l\'appli');
+    const complet = !avant || force || Date.now() - (avant.at || 0) > 6*3600000 || (conf && avant.sig !== conf.sig);
     // sites personnels en échec (hors sites qui bloquent les robots) : nouvel essai au bout d'1 h, sans tout relever
     const hoteDe = x => { try{ return new URL(x.url).hostname.replace(/^www\./, ''); }catch(e){ return ''; } };
     const aRefaire = !complet && conf ? conf.sites.filter(x => { const r = (avant.sites || {})[hoteDe(x)]; return r && r.err && !/protégé|refuse les robots/.test(r.err) && Date.now() - (r.at || 0) > 3600000; }) : [];
