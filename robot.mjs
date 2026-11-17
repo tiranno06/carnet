@@ -31,7 +31,7 @@ let prev = null;
 // 17/10 : un état présent mais illisible arrête le robot (avant, il repartait de zéro et écrasait tout l'historique)
 if(existsSync('site/data.enc')){ try{ prev = JSON.parse(await dechiffre(key, readFileSync('site/data.enc', 'utf8'))); }catch(e){ say('état précédent illisible : passage arrêté pour ne rien effacer'); process.exit(1); } }
 // tes données personnelles (stock de métaux…) : lues seulement pour calculer la valeur du jour, jamais recopiées en clair
-const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule|temp_exclus|temp_util|pieces_choix|pieces_sites|pieces_cibles|fisc_dates|pro_dessins|repl_demande)/; // 16/10 : + ta règle pour les actions, tes choix d'indicateurs comptés dans les températures
+const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule|temp_exclus|temp_util|pieces_choix|pieces_sites|pieces_cibles|pieces_perso|fisc_dates|pro_dessins|repl_demande)/; // 16/10 : + ta règle pour les actions, tes choix d'indicateurs comptés dans les températures
 let perso = {};
 if(existsSync('coffre.enc')){ try{ perso = JSON.parse(await dechiffre(key, readFileSync('coffre.enc', 'utf8'))).data || {}; }catch(e){ say('coffre illisible : passage arrêté'); process.exit(1); } }
 let subs = [];
@@ -390,7 +390,7 @@ try{
       if(sansCles === html && !html.includes('(/*__CLES_API__*/{})')){ say('accès invité : en attente de la prochaine publication de l\'appli'); }
       else {
         const kg = await cle(I.pw, JSON.parse(readFileSync('sel.json', 'utf8'))), voir = Object.assign({ metaux:false, plan:false, suivi:false }, I.voir || {});
-        const montre = k => /^mt_(temp_exclus|temp_util|ind_hidden)$/.test(k) || (voir.metaux && /^mt_(metals_(or|argent|cuivre)|metal_objectif_|metals_value_history|pieces_choix|pieces_cibles)/.test(k))
+        const montre = k => /^mt_(temp_exclus|temp_util|ind_hidden)$/.test(k) || (voir.metaux && /^mt_(metals_(or|argent|cuivre)|metal_objectif_|metals_value_history|pieces_choix|pieces_cibles|pieces_perso)/.test(k))
           || (voir.plan && /^mt_(dca_plan|fonds_euros|trad_rule)$/.test(k)) || (voir.suivi && /^mt_(watchlist|pro_dessins)$/.test(k));
         const persoG = Object.fromEntries(Object.entries(perso).filter(([k]) => montre(k)));
         const HG = { v: 1, days: {}, bul: H.bul, bulHist: H.bulHist, sante: H.sante, liens: H.liens, ...(voir.plan ? { dca: H.dca, dcaLast: H.dcaLast, matin: H.matin } : {}), ...(voir.suivi ? { wlv: H.wlv } : {}) };
