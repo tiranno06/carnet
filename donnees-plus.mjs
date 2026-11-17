@@ -172,6 +172,11 @@ export async function releveNouveaux(prev){
   await essai('short', async p => shortReleve(p), o.short && o.short.plein ? 6 : 0.33);
   await essai('fortunes', async p => fortunesReleve(p), 2);
   await essai('lic', async p => licReleve(p), o.lic && o.lic.plein ? 12 : 0.33);
+  // 17/11 : onglet 🏭, nouvelles mesures : niveau du Rhin, prix de l'électricité, vols en Europe, torchères des sites pétroliers
+  await essai('rhin', async p => rhinReleve(p), 6);
+  await essai('prix', async p => prixReleve(p), o.prix && o.prix.plein ? 6 : 0.33);
+  await essai('euro', async p => euroReleve(p), o.euro && o.euro.plein ? 20 : 0.33);
+  await essai('feux', async p => feuxReleve(p), 12);
   return { o, err };
 }
 const jourParis = t => new Date(t).toLocaleDateString('sv-SE', { timeZone: 'Europe/Paris' });
@@ -284,17 +289,82 @@ export async function releveImmo(code, prev){
 
 // 11/11 : avions en vol dans le monde (OpenSky Network, accès gratuit sans compte : 100 relevés par jour au plus). L'appli n'a pas le
 // droit de le lire directement. Moyenne par jour de Paris de tous les relevés de la journée (le robot passe à toute heure).
+// compagnies 100 % cargo (codes OACI) : FedEx, UPS, Atlas, Polar, Cargolux, DHL (DHK, BCS, DHX), ABX, ATI, Kalitta, AeroLogic, Nippon Cargo,
+// China Cargo, SF Airlines, Air Hong Kong, LATAM Cargo, ASL Belgique, Western Global, Southern, Amerijet, Air China Cargo, Cathay cargo (aucune : mixte)
+const CARGO = new Set(['FDX', 'UPS', 'GTI', 'PAC', 'CLX', 'DHK', 'BCS', 'DHX', 'ABX', 'ATN', 'CKS', 'BOX', 'NCA', 'CKK', 'CSS', 'AHK', 'LCO', 'TAY', 'WGN', 'SOO', 'AJT', 'CAO', 'ABW', 'MPH', 'GEC', 'QAC', 'TPA', 'SQC', 'ICV']);
 async function avionsReleve(p){
   // OpenSky refuse les demandes qui se présentent comme un navigateur (erreur 503) : le robot dit son vrai nom
   const r = await fetch('https://opensky-network.org/api/states/all', { headers: { 'user-agent': 'carnet-robot' }, signal: AbortSignal.timeout(60000) }); if(!r.ok) throw new Error('OpenSky ' + r.status);
   const d = await r.json(), S = (d && d.states) || [];
   const n = S.filter(x => x && x[8] === false).length; if(n < 1000) throw new Error('OpenSky : trop peu d\'avions (' + n + ')');
-  const j = jourParis(Date.now()), h = { ...((p && p.h) || {}) }, x = h[j] || [0, 0]; h[j] = [x[0] + n, x[1] + 1];
+  // 17/11 : avions-cargos (compagnies qui ne transportent que des marchandises, reconnues aux 3 lettres de leur indicatif ; aucun nom gardé)
+  const nc = S.filter(x => x && x[8] === false && CARGO.has(String(x[1] || '').trim().slice(0, 3).toUpperCase())).length;
+  const j = jourParis(Date.now()), h = { ...((p && p.h) || {}) }, x = h[j] || [0, 0, 0]; h[j] = [x[0] + n, x[1] + 1, (x[2] || 0) + nc];
   // 11/11 : échantillon de positions pour la carte animée de l'appli (1 avion sur 3, au plus 3 000) : position, cap et vitesse
   // seulement — ni nom de vol ni immatriculation. L'appli fait avancer chaque avion selon son cap et sa vitesse depuis ce relevé.
   const V = S.filter(a => a && a[8] === false && a[5] != null && a[6] != null && a[9] > 30 && a[10] != null), pas = Math.max(1, Math.ceil(V.length / 3000));
   const pos = V.filter((a, i) => i % pas === 0).map(a => [Math.round(a[6]*100)/100, Math.round(a[5]*100)/100, Math.round(a[10]), Math.round(a[9])]);
-  return { h: garder(h, 1100), der: { t: Date.now(), n }, pos: { t: (d.time || Math.floor(Date.now()/1000))*1000, a: pos } };
+  return { h: garder(h, 1100), der: { t: Date.now(), n, c: nc }, pos: { t: (d.time || Math.floor(Date.now()/1000))*1000, a: pos } };
+}
+// 17/11 : niveau du Rhin à Kaub (Pegelonline, service public allemand des voies d'eau) : moyenne de la journée en cm. Le service ne
+// garde que 31 jours : l'historique se construit jour après jour. Sous ~80 cm, les péniches chargent moins (chimie, acier, charbon).
+async function rhinReleve(p){
+  const d = JSON.parse(await lire('https://www.pegelonline.wsv.de/webservices/rest-api/v2/stations/KAUB/W/measurements.json?start=P31D'));
+  if(!Array.isArray(d) || d.length < 50) throw new Error('Pegelonline : relevés absents');
+  const S = {}; d.forEach(x => { const k = String(x.timestamp).slice(0, 10), v = +x.value; if(!isFinite(v)) return; (S[k] = S[k] || [0, 0]); S[k][0] += v; S[k][1]++; });
+  const j = { ...((p && p.j) || {}) }; Object.entries(S).forEach(([k, [s, n]]) => { if(n >= 48) j[k] = Math.round(s/n); }); // au moins 12 h de relevés (toutes les 15 min)
+  const z = d[d.length - 1]; return { j: garder(j, 4000), der: [String(z.timestamp).slice(0, 16), Math.round(+z.value)] };
+}
+// 17/11 : prix de gros de l'électricité (bourse européenne, prix du lendemain), moyenne de la journée en € le MWh, France et Allemagne.
+// Historique rattrapé depuis 2019, 3 mois par pays et par passage (comme la consommation).
+async function prixReleve(p){
+  const o = { j: { fr: {}, de: {}, ...((p && p.j) || {}) } }, auj = new Date(), ZONE = { fr: 'FR', de: 'DE-LU' };
+  for(const pays of ['fr', 'de']){
+    const J = { ...(o.j[pays] || {}) }, ks = Object.keys(J).sort(), deb = ks[0], fin = ks[ks.length - 1], plages = [];
+    const mois = (y, m) => [new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10), new Date(Date.UTC(y, m + 1, 0)).toISOString().slice(0, 10)];
+    if(fin) plages.push([new Date(Date.parse(fin) - 3*86400000).toISOString().slice(0, 10), new Date(auj.getTime() + 86400000).toISOString().slice(0, 10)]);
+    else { const t = new Date(Date.UTC(auj.getUTCFullYear(), auj.getUTCMonth(), 1)); plages.push(mois(t.getUTCFullYear(), t.getUTCMonth())); }
+    let y = deb ? +deb.slice(0, 4) : auj.getUTCFullYear(), m = deb ? +deb.slice(5, 7) - 1 : auj.getUTCMonth();
+    for(let k = 0; k < 3 && (!deb || deb > '2019-01-01'); k++){ m--; if(m < 0){ m = 11; y--; } if(y < 2019) break; plages.push(mois(y, m)); }
+    for(const [a, b] of plages){
+      const d = JSON.parse(await lire(`https://api.energy-charts.info/price?bzn=${ZONE[pays]}&start=${a}&end=${b}`));
+      if(!Array.isArray(d.unix_seconds) || !Array.isArray(d.price)) throw new Error('Energy-Charts (prix) : format changé');
+      const S = {}; d.unix_seconds.forEach((t, i) => { const v = d.price[i]; if(v == null || !isFinite(v)) return; const k = jourParis(t*1000); (S[k] = S[k] || [0, 0]); S[k][0] += v; S[k][1]++; });
+      const pas = d.unix_seconds.length > 1 ? Math.max(60, d.unix_seconds[1] - d.unix_seconds[0]) : 3600, mini = Math.floor(20*3600/pas);
+      Object.entries(S).forEach(([k, [s, n]]) => { if(n >= mini) J[k] = Math.round(s/n*10)/10; });
+    }
+    o.j[pays] = J;
+  }
+  o.plein = ['fr', 'de'].every(p => { const k = Object.keys(o.j[p]).sort()[0]; return k && k <= '2019-01-02'; });
+  return o;
+}
+// 17/11 : vols en Europe (Eurocontrol, fichiers publics des aéroports : départs de chaque jour, environ 300 grands aéroports).
+// Publiés avec environ 6 semaines de retard. Année en cours relue une fois par jour ; années passées rattrapées une par passage.
+async function euroReleve(p){
+  const j = { ...((p && p.j) || {}) }, faites = new Set((p && p.ans) || []), an = new Date().getUTCFullYear(), L = [an];
+  for(let y = an - 1; y >= 2019; y--) if(!faites.has(y)){ L.push(y); break; }
+  for(const y of L){
+    let t; try{ t = await lire(`https://www.eurocontrol.int/performance/data/download/csv/airport_traffic_${y}.csv`); }catch(e){ if(y === an && / 404$/.test(e.message)) continue; throw e; }
+    const lignes = t.split(/\r?\n/), h = lignes[0].split(','), iD = h.indexOf('FLT_DATE'), iN = h.indexOf('FLT_DEP_1');
+    if(iD < 0 || iN < 0) throw new Error('Eurocontrol : colonnes changées');
+    const S = {}; for(let k = 1; k < lignes.length; k++){ const c = lignes[k].split(','); const d = c[iD], v = +c[iN]; if(/^\d{4}-\d{2}-\d{2}$/.test(d || '') && isFinite(v)) S[d] = (S[d] || 0) + v; }
+    if(Object.keys(S).length < 20) throw new Error('Eurocontrol : fichier ' + y + ' presque vide');
+    Object.assign(j, S); if(y < an) faites.add(y);
+  }
+  return { j: garder(j, 3500), ans: [...faites].sort(), plein: [...Array(an - 2019).keys()].every(i => faites.has(2019 + i)) };
+}
+// 17/11 : torchères et feux de nuit vus par satellite (NASA FIRMS, fichier public des dernières 48 h, sans clé) autour de 4 grandes
+// régions pétrolières. Seuls les points de NUIT sont comptés (les feux agricoles sont surtout de jour). Très sensible aux nuages :
+// à lire en moyenne sur plusieurs jours. L'historique se construit jour après jour.
+const FEUX_ZONES = { golfe: [24, 32, 44, 56.5], siberie: [55, 66, 63, 85], permien: [30.5, 33.5, -104.8, -100.5], niger: [4, 6.5, 5, 8.5] };
+async function feuxReleve(p){
+  const t = await lire('https://firms.modaps.eosdis.nasa.gov/data/active_fire/noaa-21-viirs-c2/csv/J2_VIIRS_C2_Global_48h.csv'), L = t.split(/\r?\n/), h = L[0].split(',');
+  const I = { la: h.indexOf('latitude'), lo: h.indexOf('longitude'), d: h.indexOf('acq_date'), n: h.indexOf('daynight') }; if(Object.values(I).some(x => x < 0)) throw new Error('FIRMS : colonnes changées');
+  const hier = new Date(Date.now() - 86400000).toISOString().slice(0, 10), c = Object.fromEntries(Object.keys(FEUX_ZONES).map(k => [k, 0])); let tous = 0;
+  for(let k = 1; k < L.length; k++){ const r = L[k].split(','); if(r[I.d] !== hier) continue; tous++; if(r[I.n] !== 'N') continue; const la = +r[I.la], lo = +r[I.lo];
+    for(const [z, [a, b, x, y]] of Object.entries(FEUX_ZONES)) if(la >= a && la <= b && lo >= x && lo <= y) c[z]++; }
+  if(tous < 5000) throw new Error('FIRMS : journée d\'hier incomplète (' + tous + ' points)');
+  const j = { ...((p && p.j) || {}) }; j[hier] = c; return { j: garder(j, 1500) };
 }
 // 11/11 : consommation d'électricité de la France et de l'Allemagne (Energy-Charts, Fraunhofer ISE ; moyenne de la journée en GW).
 // Premier passage : l'historique est rattrapé depuis 2019, 3 mois par pays et par passage ; ensuite, les derniers jours seulement.
