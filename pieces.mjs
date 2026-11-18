@@ -114,7 +114,8 @@ function extrairePage(){
   // page d'un seul produit : le titre principal et le premier prix visible
   const h1 = document.querySelector('h1'); if(h1 && !out.some(o => o.url === location.href)){ const z = h1.closest('main,article,[class*=product],[id*=product]') || document.body; const txt = z.innerText || '', m = [...txt.matchAll(new RegExp(prixRe.source, 'g'))].find(x => { const av = txt.slice(Math.max(0, x.index - 160), x.index), dv = av.search(/vous vendez|mes ventes/i), da = av.search(/vous achetez|mes achats/i); const L = av.split(/\n/), ligne = (L.pop() || '') + ' ' + (/[a-zà-ÿ]{3,}/i.test(av.split(/\n/).pop() || '') ? '' : (L.filter(l => l.trim()).pop() || '')); return !PAS_ACHAT.test(ligne) && !/en temps r[ée]el|cours (de|du|et)/i.test(ligne) && !(dv >= 0 && dv > da); }); if(m && !EPUISE.test(txt.slice(Math.max(0, m.index - 400), m.index + 600))){ const v = lit(m[1] || m[2]); if(v) out.push({ t: net(h1.textContent).slice(0, 220), prix: v, url: location.href }); } }
   const liens = [...document.querySelectorAll('a[href]')].map(a => ({ u: a.href.split('#')[0], t: net(a.textContent).slice(0, 80) })).filter(l => /^https?:/.test(l.u));
-  return { titre: document.title, produits: out, liens };
+  let epuise = false; if(h1){ const z = h1.closest('main,article,[class*=product],[id*=product]') || document.body, t = z.innerText || '', i = Math.max(0, t.indexOf((h1.innerText || '').trim())); epuise = EPUISE.test(t.slice(i, i + 1500)); }
+  return { titre: document.title, produits: out, liens, epuise };
 }
 const PROTEGE = /just a moment|un instant|attention required|access denied|acc[eè]s refus|verifying|v[ée]rification de s[ée]curit[ée]|captcha|are you a robot|pardon our interruption|mesure de s[ée]curit[ée]|security measure/i;
 async function lirePage(ctx, url){
@@ -260,4 +261,24 @@ export async function releveFraisComparateur(prev, parPassage = 8){
     if(Object.keys(data).length >= 5){ p.data = data; p.at = maint; } else { p.at = maint; p.err = 'trop peu de boutiques lues'; }
     p.enCours = false; delete p.pages; delete p.obs; delete p.i; }
   return { p, n };
+}
+
+// ==== 18/11 (demande du propriétaire) : triple contrôle des prix des pièces — contrôle n°1 : la fiche de l'offre est RELUE ====
+// Pour les offres les moins chères de chaque pièce suivie (liste donnée par l'appli, piecesAVerifier), le robot rouvre la page de
+// l'annonce : le prix doit y être retrouvé (à 3 % près) et la pièce ne doit pas y être marquée épuisée. robots.txt respecté.
+export async function verifierOffres(ctx, liste, ancien = {}, parallele = 6, budgetMs = 120000){
+  const t0 = Date.now(), verif = { ...ancien }; let n = 0, ko = 0, i = 0;
+  for(const [u, v] of Object.entries(verif)) if(Date.now() - (v.at || 0) > 7*86400000) delete verif[u]; // ménage : plus d'une semaine
+  const un = async o => { const h = hote(o.url); if(!h) return; let r = { at: Date.now(), prix: o.prix, lu: null, dispo: true, ok: false, err: null };
+    try{ const RR = await reglesRobots(h); if(!autorise(RR, o.url)) throw new Error('refuse les robots');
+      const R = await lirePage(ctx, o.url), page = o.url.split(/[?#]/)[0];
+      const P = R.produits.filter(x => x.prix > 0), meme = P.filter(x => x.url.split(/[?#]/)[0] === page), cands = meme.length ? meme : P;
+      const best = cands.map(x => x.prix).sort((a, b) => Math.abs(a - o.prix) - Math.abs(b - o.prix))[0];
+      r.lu = best != null && Math.abs(best - o.prix)/o.prix < 0.25 ? best : null; r.dispo = !R.epuise;
+      r.ok = r.dispo && r.lu != null && Math.abs(r.lu - o.prix)/o.prix <= 0.03;
+    }catch(e){ r.err = String(e.message || e).slice(0, 60); }
+    verif[o.url] = r; n++; if(!r.ok) ko++; };
+  const ouvrier = async () => { while(i < liste.length && Date.now() - t0 < budgetMs){ const o = liste[i++]; try{ await un(o); }catch(e){} } };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(parallele, liste.length)) }, ouvrier));
+  return { verif, n, ko };
 }

@@ -6,7 +6,7 @@ import http from 'node:http';
 import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
-import { relevePieces, releveSitesUtilisateur, verifierLivraison, releveFraisComparateur } from './pieces.mjs';
+import { relevePieces, releveSitesUtilisateur, verifierLivraison, releveFraisComparateur, verifierOffres } from './pieces.mjs';
 import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux, releveImmo } from './donnees-plus.mjs';
 
 const t0 = Date.now();
@@ -161,7 +161,7 @@ try{
       const P = avant; P.sites = P.sites || {}; let nS = 0;
       const R = await releveSitesUtilisateur(page.context(), { ...conf, sites: aRefaire }, P.sites, 100000, 6);
       for(const [h, r] of Object.entries(R)){ const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
-        P.sites[h] = { nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : ((P.sites[h] || {}).offres || []) }; nS++;
+        P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : ((P.sites[h] || {}).offres || []) }; nS++;
         say(`pièces — site personnel relu : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); }
       await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P));
     }
@@ -174,14 +174,21 @@ try{
         for(const [h, r] of Object.entries(R)){
           const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
           const ancien = P.sites[h] || {};
-          P.sites[h] = { nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : (r.err ? (ancien.offres || []) : []) };
+          P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : (r.err ? (ancien.offres || []) : []) };
           nS++; say(`pièces — site personnel n°${nS} : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); // jamais le nom du site : le journal est public
         }
       }
-      P.sig = conf ? conf.sig : null; if(avant && avant.port) P.port = avant.port; if(avant && avant.portBs) P.portBs = avant.portBs;
+      P.sig = conf ? conf.sig : null; if(avant && avant.port) P.port = avant.port; if(avant && avant.portBs) P.portBs = avant.portBs; if(avant && avant.verif) P.verif = avant.verif;
       if(P.ok || nS){ await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P)); }
       say(`prix des pièces : ${P.ok} relevé(s) chez les marchands intégrés, ${P.ko} manquant(s), ${nS} site(s) personnel(s) lu(s)`);
     }
+    // 18/11 : triple contrôle, contrôle n°1 : les offres les moins chères de chaque pièce suivie sont relues sur leur fiche (prix et disponibilité),
+    // au plus 30 par passage, chacune environ toutes les 6 h ; gardé dans mt_pieces_prix.verif. Jamais le nom d'un site dans ce journal.
+    try{ const P = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_prix') || 'null'); }catch(e){ return null; } });
+      const L = P ? await page.evaluate(() => { try{ return piecesAVerifier(30); }catch(e){ return []; } }) : [];
+      if(P && L.length){ const t0 = Date.now(), V = await verifierOffres(page.context(), L, P.verif || {}); P.verif = V.verif;
+        await page.evaluate(v => localStorage.setItem('mt_pieces_prix', v), JSON.stringify(P));
+        say(`prix des pièces : ${V.n} fiche(s) relue(s) pour contrôle en ${Math.round((Date.now() - t0)/1000)} s, ${V.ko} non confirmée(s)`); } }catch(e){ say('prix des pièces : contrôle des fiches impossible'); }
     // 17/11 : frais de livraison de chaque site vérifiés tout seuls (au plus 2 sites par passage, chacun environ tous les 14 jours) ;
     // gardés dans mt_pieces_prix.port (déjà conservé d'un passage à l'autre et envoyé aux appareils). Jamais le nom du site dans ce journal.
     try{ const P = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_prix') || 'null'); }catch(e){ return null; } });
