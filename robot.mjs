@@ -155,10 +155,11 @@ try{
     const aRefaire = !complet && conf ? conf.sites.filter(x => { const r = (avant.sites || {})[hoteDe(x)]; return r && r.err && !/protégé|refuse les robots/.test(r.err) && Date.now() - (r.at || 0) > 3600000; }) : [];
     // 17/11 : beaucoup de sites (36 boutiques suivies par un comparateur ajoutées) : à chaque passage, en plus, le site le plus anciennement lu
     // s'il a plus de 8 h (une minute environ) ; ainsi chaque site est relu environ deux fois par jour sans allonger beaucoup le passage
-    if(!complet && conf && !aRefaire.length){ const vieux = conf.sites.map(x => [x, ((avant.sites || {})[hoteDe(x)] || {}).at || 0]).filter(([, t]) => Date.now() - t > 8*3600000).sort((a, b) => a[1] - b[1]); if(vieux.length) aRefaire.push(vieux[0][0]); }
+    // 18/11 (relevé le plus rapide possible) : les 6 sites les plus anciennement lus (plus de 2 h), lus en même temps (environ 1 min 30)
+    if(!complet && conf){ const deja = new Set(aRefaire.map(hoteDe)); const vieux = conf.sites.filter(x => !deja.has(hoteDe(x))).map(x => [x, ((avant.sites || {})[hoteDe(x)] || {}).at || 0]).filter(([, t]) => Date.now() - t > 2*3600000).sort((a, b) => a[1] - b[1]); vieux.slice(0, Math.max(0, 6 - aRefaire.length)).forEach(([x]) => aRefaire.push(x)); }
     if(aRefaire.length){
       const P = avant; P.sites = P.sites || {}; let nS = 0;
-      const R = await releveSitesUtilisateur(page.context(), { ...conf, sites: aRefaire }, P.sites, 120000);
+      const R = await releveSitesUtilisateur(page.context(), { ...conf, sites: aRefaire }, P.sites, 100000, 6);
       for(const [h, r] of Object.entries(R)){ const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
         P.sites[h] = { nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : ((P.sites[h] || {}).offres || []) }; nS++;
         say(`pièces — site personnel relu : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); }
@@ -169,7 +170,7 @@ try{
       P.sites = Object.fromEntries(Object.entries((avant && avant.sites) || {}).filter(([h]) => garde.has(h)));
       let nS = 0;
       if(conf && conf.sites.length){
-        const R = await releveSitesUtilisateur(page.context(), conf, P.sites, 240000);
+        const R = await releveSitesUtilisateur(page.context(), conf, P.sites, 240000, 6);
         for(const [h, r] of Object.entries(R)){
           const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
           const ancien = P.sites[h] || {};

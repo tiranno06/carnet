@@ -117,12 +117,15 @@ async function reglesRobots(h){
 const regleRe = x => new RegExp('^' + x.replace(/[.+?^{}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\\\$$/, '$').replace(/\$(?!$)/g, '\\$'));
 const autorise = (R, url) => { let p = '/'; try{ const u = new URL(url); p = u.pathname + u.search; }catch(e){} const lg = L => Math.max(-1, ...L.filter(x => { try{ return regleRe(x).test(p); }catch(e){ return false; } }).map(x => x.length));
   return lg(R.permis) >= lg(R.interdit); };
-export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs = 200000){
+// 18/11 (demande du propriétaire : relevé le plus rapide possible) : plusieurs sites lus EN MÊME TEMPS (6 par défaut),
+// chacun dans sa page ; un nouveau site n'est commencé que s'il reste du temps dans le budget
+export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs = 200000, parallele = 6){
   const t0 = Date.now(), res = {}, mots = (conf.mots || []).map(m => m.toLowerCase());
   const sites = [...(conf.sites || [])].sort((a, b) => ((anciens[hote(a.url)] || {}).at || 0) - ((anciens[hote(b.url)] || {}).at || 0));
-  for(const S of sites){
-    const h = hote(S.url); if(!h) continue;
-    if(Date.now() - t0 > budgetMs) break;
+  let suivant = 0;
+  const ouvrier = async () => { while(suivant < sites.length && Date.now() - t0 <= budgetMs){ const S = sites[suivant++]; try{ await unSite(S); }catch(e){} } };
+  const unSite = async S => {
+    const h = hote(S.url); if(!h) return;
     const ts = Date.now(), produits = [], vus = new Set(); let err = null;
     try{
       const RR = await reglesRobots(h); if(!autorise(RR, S.url)) throw new Error('ce site refuse les robots (robots.txt)');
@@ -151,7 +154,8 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
     }catch(e){ err = String(e.message || e).slice(0, 80); }
     const uniq = []; const cle = new Set(); produits.forEach(p => { const k = p.url + '|' + p.prix; if(!cle.has(k) && p.t){ cle.add(k); uniq.push(p); } });
     res[h] = { nom: S.nom || h, url: S.url, err: uniq.length ? null : err, produits: uniq.slice(0, 1500) };
-  }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(parallele, sites.length)) }, ouvrier));
   return res;
 }
 const hote = u => { try{ return new URL(u).hostname.replace(/^www\./, ''); }catch(e){ return ''; } };
