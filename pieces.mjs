@@ -62,7 +62,7 @@ function extrairePage(){
   const TITRES = []; { const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); let n; while((n = w.nextNode())){ const t = n.textContent; if(t.length > 200) continue; if(VENDRE.test(t)) TITRES.push([n, 'v']); else if(/vous achetez/i.test(t)) TITRES.push([n, 'a']); } }
   const dernierTitre = e => { let lo = 0, hi = TITRES.length - 1, r = ''; while(lo <= hi){ const m = (lo + hi) >> 1; if(TITRES[m][0].compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING){ r = TITRES[m][1]; lo = m + 1; } else hi = m - 1; } return r; };
   const EPUISE = /rupture de stock|en rupture|[ée]puis[ée]e?s?\b|\bindisponible|plus disponible|non disponible|pas disponible|bient[ôo]t disponible|hors stock|out of stock|sold out|currently unavailable|ausverkauft|nicht (mehr )?(verf[üu]gbar|lieferbar|auf lager)|agotado|esaurito|non disponibile|me pr[ée]venir|pr[ée]venez[- ]moi|m'avertir|alerte (de )?(disponibilit|retour en stock)|benachrichtig/i;
-  const PAS_ACHAT = /cotation|intrins|valeur (du |de l'|en )?m[ée]tal|valeur m[ée]tal|melt value|\bspot\b|^vente$|rachat|nous (vous )?rachetons|\breprise\b|ankauf|we buy|sell to us/i;
+  const PAS_ACHAT = /(^|\s)cours\b(?!\s+(de\s+)?(commande|livraison|r[ée]appro))|cotation|intrins|valeur (du |de l'|en )?m[ée]tal|valeur m[ée]tal|melt value|\bspot\b|^vente$|rachat|nous (vous )?rachetons|\breprise\b|ankauf|we buy|sell to us/i;
   const prixRe = /(\d{1,3}(?:[ .,  ]\d{3})*[.,]\d{2}|\d+[.,]\d{2}|\d{1,3}(?:[ .  ]\d{3})+|\d+)\s*(?:€|EUR)|(?:€|EUR)\s*(\d{1,3}(?:[ .,  ]\d{3})*(?:[.,]\d{2})?)/;
   const lit = s => { s = String(s).replace(/[\s  ]/g, ''); if(/,\d{2}$/.test(s)) s = s.replace(/\./g, '').replace(',', '.'); else if(/\.\d{2}$/.test(s)) s = s.replace(/,/g, ''); else s = s.replace(/[.,]/g, ''); const v = parseFloat(s); return v > 0 && v < 200000 ? v : null; };
   const net = t => String(t || '').replace(/\s+/g, ' ').trim(), out = [];
@@ -94,6 +94,7 @@ function extrairePage(){
       const liens = [...c.querySelectorAll('a[href]')].filter(x => net(x.textContent).length > 8 && !/javascript:/.test(x.href));
       if(liens.length){ const n = (c.textContent.match(new RegExp(prixRe.source, 'g')) || []).length; if(n <= 4) a = liens.sort((x, y) => net(y.textContent).length - net(x.textContent).length)[0]; break; } }
     if(!a) continue;
+    if(a.href.includes('#') && a.href.split('#')[0] === location.href.split('#')[0]) continue; // lien vers un passage de la même page (article)
     // la « carte » entière de l'annonce (le plus grand bloc qui ne parle que de ce produit) : enchère → pas un prix d'achat
     let carte = c; const moi = a.href.split('?')[0];
     for(let i = 0; i < 4; i++){ const P = carte.parentElement; if(!P || P === document.body) break;
@@ -112,10 +113,12 @@ function extrairePage(){
     out.push({ t: t.slice(0, 220), prix: v, url: a.href });
   }
   // page d'un seul produit : le titre principal et le premier prix visible
-  const h1 = document.querySelector('h1'); if(h1 && !out.some(o => o.url === location.href)){ const z = h1.closest('main,article,[class*=product],[id*=product]') || document.body; const txt = z.innerText || '', m = [...txt.matchAll(new RegExp(prixRe.source, 'g'))].find(x => { const av = txt.slice(Math.max(0, x.index - 160), x.index), dv = av.search(/vous vendez|mes ventes/i), da = av.search(/vous achetez|mes achats/i); const L = av.split(/\n/), ligne = (L.pop() || '') + ' ' + (/[a-zà-ÿ]{3,}/i.test(av.split(/\n/).pop() || '') ? '' : (L.filter(l => l.trim()).pop() || '')); return !PAS_ACHAT.test(ligne) && !/en temps r[ée]el|cours (de|du|et)/i.test(ligne) && !(dv >= 0 && dv > da); }); if(m && !EPUISE.test(txt.slice(Math.max(0, m.index - 400), m.index + 600))){ const v = lit(m[1] || m[2]); if(v) out.push({ t: net(h1.textContent).slice(0, 220), prix: v, url: location.href }); } }
+  const h1 = document.querySelector('h1'); if(h1 && !out.some(o => o.url === location.href)){ const z = h1.closest('main,article,[class*=product],[id*=product]') || document.body; const txt = z.innerText || '', m = [...txt.matchAll(new RegExp(prixRe.source, 'g'))].find(x => { const av = txt.slice(Math.max(0, x.index - 160), x.index), dv = av.search(/vous vendez|mes ventes/i), da = av.search(/vous achetez|mes achats/i); const L = av.split(/\n/), ligne = (L.pop() || '') + ' ' + (/[a-zà-ÿ]{3,}/i.test(av.split(/\n/).pop() || '') ? '' : (L.filter(l => l.trim()).pop() || '')); return !PAS_ACHAT.test(ligne) && !/en temps r[ée]el|cours (de|du|et)/i.test(ligne) && !(dv >= 0 && dv > da); }); if(m && !EPUISE.test(txt.slice(Math.max(0, m.index - 400), m.index + 600))){ const v = lit(m[1] || m[2]); if(v) out.push({ t: net(h1.textContent).slice(0, 220), prix: v, url: location.href, fiche: 1 }); } }
   const liens = [...document.querySelectorAll('a[href]')].map(a => ({ u: a.href.split('#')[0], t: net(a.textContent).slice(0, 80) })).filter(l => /^https?:/.test(l.u));
   let epuise = false; if(h1){ const z = h1.closest('main,article,[class*=product],[id*=product]') || document.body, t = z.innerText || '', i = Math.max(0, t.indexOf((h1.innerText || '').trim())); epuise = EPUISE.test(t.slice(i, i + 1500)); }
-  return { titre: document.title, produits: out, liens, epuise };
+  // 18/11 : page de cours, de valeur des pièces, de cotation ou de rachat : les prix qu'elle montre ne sont pas des prix de vente (on suit seulement ses liens)
+  const pageRef = /cours|valeur|cotation|rachat|vendre|revendre|estimation|\bspot\b|ankauf|verkaufen/i.test(decodeURIComponent(location.pathname));
+  return { titre: document.title, produits: pageRef ? [] : out, liens, epuise };
 }
 const PROTEGE = /just a moment|un instant|attention required|access denied|acc[eè]s refus|verifying|v[ée]rification de s[ée]curit[ée]|captcha|are you a robot|pardon our interruption|mesure de s[ée]curit[ée]|security measure/i;
 async function lirePage(ctx, url){
@@ -151,7 +154,7 @@ const autorise = (R, url) => { let p = '/'; try{ const u = new URL(url); p = u.p
 // chacun dans sa page ; un nouveau site n'est commencé que s'il reste du temps dans le budget
 export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs = 200000, parallele = 6){
   const t0 = Date.now(), res = {}, mots = (conf.mots || []).map(m => m.toLowerCase());
-  const sites = [...(conf.sites || [])].sort((a, b) => ((anciens[hote(a.url)] || {}).at || 0) - ((anciens[hote(b.url)] || {}).at || 0));
+  const sites = [...(conf.sites || [])].sort((a, b) => ((anciens[cleSite(a.url)] || {}).at || 0) - ((anciens[cleSite(b.url)] || {}).at || 0));
   let suivant = 0;
   const ouvrier = async () => { while(suivant < sites.length && Date.now() - t0 <= budgetMs){ const S = sites[suivant++]; try{ await unSite(S); }catch(e){} } };
   const unSite = async S => {
@@ -182,13 +185,19 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
       }
       if(!produits.length && !err) err = 'aucun prix trouvé sur ce site';
     }catch(e){ err = String(e.message || e).slice(0, 80); }
-    const uniq = []; const cle = new Set(); produits.forEach(p => { const k = p.url + '|' + p.prix; if(!cle.has(k) && p.t){ cle.add(k); uniq.push(p); } });
-    res[h] = { nom: S.nom || h, url: S.url, err: uniq.length ? null : err, produits: uniq.slice(0, 1500) };
+    // 18/11 : quand la FICHE d'un produit a été lue, son prix fait foi : les autres prix lus ailleurs pour la même adresse (page « valeur des
+    // pièces », bandeau, comparatif…) sont écartés s'ils s'en éloignent de plus de 2 %
+    const sansAncre = u => String(u || '').split('#')[0].split('?')[0], fiches = {}; produits.forEach(p => { if(p.fiche) fiches[sansAncre(p.url)] = p.prix; });
+    const uniq = []; const cle = new Set(); produits.forEach(p => { const f = fiches[sansAncre(p.url)]; if(f != null && !p.fiche && Math.abs(p.prix - f)/f > 0.02) return; const k = p.url + '|' + p.prix; if(!cle.has(k) && p.t){ cle.add(k); uniq.push(p); } });
+    res[cleSite(S.url)] = { nom: S.nom || h, url: S.url, err: uniq.length ? null : err, produits: uniq.slice(0, 1500) };
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(parallele, sites.length)) }, ouvrier));
   return res;
 }
 const hote = u => { try{ return new URL(u).hostname.replace(/^www\./, ''); }catch(e){ return ''; } };
+// 18/11 : la « case » d'un site dans mt_pieces_prix.sites : son adresse, sauf les boutiques eBay (toutes sur ebay.fr) : « ebay.fr/str/<boutique> »,
+// sinon toutes les boutiques eBay se mélangeaient (nom d'une boutique affiché sur les annonces d'une autre)
+export const cleSite = u => { const h = hote(u), m = String(u || '').match(/ebay\.[a-z.]+\/str\/([^/?#]+)/i); return m ? `${h}/str/${m[1].toLowerCase()}` : h; };
 
 // ==== 17/11 (demande du propriétaire) : vérification automatique des frais de livraison, environ 2 fois par mois et par site ====
 // À chaque passage, au plus 2 sites dont la dernière vérification a plus de 14 jours : la page d'accueil, puis jusqu'à 3 pages dont le lien
