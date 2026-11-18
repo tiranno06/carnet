@@ -91,20 +91,20 @@ function extrairePage(){
     { const td = e.closest('td'); const tb = td && td.closest('table'); if(tb){ const idx = [...td.parentElement.children].indexOf(td), tete = tb.querySelector('thead tr') || tb.querySelector('tr'); const h = tete && tete !== td.parentElement && tete.children[idx] ? net(tete.children[idx].textContent) : ''; if(h && (PAS_ACHAT.test(h) || VENDRE.test(h) || /^(vente|vendre|verkauf|rachat|prix de rachat)\b/i.test(h))) continue; } }
     let c = e, a = null;
     for(let i = 0; i < 7; i++){ c = c.parentElement; if(!c || c === document.body) break;
-      const liens = [...c.querySelectorAll('a[href]')].filter(x => net(x.textContent).length > 8 && !/javascript:/.test(x.href));
+      const liens = [...c.querySelectorAll('a[href]:not(svg *)')].filter(x => net(x.textContent).length > 8 && !/javascript:/.test(x.href));
       if(liens.length){ const n = (c.textContent.match(new RegExp(prixRe.source, 'g')) || []).length; if(n <= 4) a = liens.sort((x, y) => net(y.textContent).length - net(x.textContent).length)[0]; break; } }
     if(!a) continue;
     if(a.href.includes('#') && a.href.split('#')[0] === location.href.split('#')[0]) continue; // lien vers un passage de la même page (article)
     // la « carte » entière de l'annonce (le plus grand bloc qui ne parle que de ce produit) : enchère → pas un prix d'achat
     let carte = c; const moi = a.href.split('?')[0];
     for(let i = 0; i < 4; i++){ const P = carte.parentElement; if(!P || P === document.body) break;
-      const autres = new Set([...P.querySelectorAll('a[href]')].map(x => x.href.split('?')[0]).filter(u => u !== moi && /\/(itm|produit|product)\/|,a\.html|\/p\//.test(u)));
+      const autres = new Set([...P.querySelectorAll('a[href]:not(svg *)')].map(x => x.href.split('?')[0]).filter(u => u !== moi && /\/(itm|produit|product)\/|,a\.html|\/p\//.test(u)));
       if(autres.size) break; carte = P; }
     if(/\bench[eè]res?\b|\bmiser\b|e-auction|\bbids?\b|\bgebote?\b|offre la plus [ée]lev[ée]e|temps restant/i.test(carte.textContent)) continue;
     // 18/11 : pièce pas disponible (rupture, épuisée…) : ne compte pas pour la prime la plus basse. On ne regarde que le bloc de CETTE
     // annonce : on remonte tant que le bloc ne contient qu'un seul lien d'annonce différent et pas d'autre prix que les siens
     { let bloc = c; for(let i = 0; i < 5; i++){ const P = bloc.parentElement; if(!P || P === document.body || P.textContent.length > 2500) break;
-        const L = new Set([...P.querySelectorAll('a[href]')].filter(x => net(x.textContent).length > 8).map(x => x.href.split(/[?#]/)[0])); if(L.size > 1) break;
+        const L = new Set([...P.querySelectorAll('a[href]:not(svg *)')].filter(x => net(x.textContent).length > 8).map(x => x.href.split(/[?#]/)[0])); if(L.size > 1) break;
         const n = (net(P.textContent).match(new RegExp(prixRe.source, 'g')) || []).length; if(n > 4) break; bloc = P; }
       if(EPUISE.test(bloc.textContent)) continue; }
     const m = e.textContent.match(prixRe), v = lit(m[1] || m[2]); if(!v) continue;
@@ -114,7 +114,7 @@ function extrairePage(){
   }
   // page d'un seul produit : le titre principal et le premier prix visible
   const h1 = document.querySelector('h1'); if(h1 && !out.some(o => o.url === location.href)){ const z = h1.closest('main,article,[class*=product],[id*=product]') || document.body; const txt = z.innerText || '', m = [...txt.matchAll(new RegExp(prixRe.source, 'g'))].find(x => { const av = txt.slice(Math.max(0, x.index - 160), x.index), dv = av.search(/vous vendez|mes ventes/i), da = av.search(/vous achetez|mes achats/i); const L = av.split(/\n/), ligne = (L.pop() || '') + ' ' + (/[a-zà-ÿ]{3,}/i.test(av.split(/\n/).pop() || '') ? '' : (L.filter(l => l.trim()).pop() || '')); return !PAS_ACHAT.test(ligne) && !/en temps r[ée]el|cours (de|du|et)/i.test(ligne) && !(dv >= 0 && dv > da); }); if(m && !EPUISE.test(txt.slice(Math.max(0, m.index - 400), m.index + 600))){ const v = lit(m[1] || m[2]); if(v) out.push({ t: net(h1.textContent).slice(0, 220), prix: v, url: location.href, fiche: 1 }); } }
-  const liens = [...document.querySelectorAll('a[href]')].map(a => ({ u: a.href.split('#')[0], t: net(a.textContent).slice(0, 80) })).filter(l => /^https?:/.test(l.u));
+  const liens = [...document.querySelectorAll('a[href]:not(svg *)')].map(a => ({ u: a.href.split('#')[0], t: net(a.textContent).slice(0, 80) })).filter(l => /^https?:/.test(l.u));
   let epuise = false; if(h1){ const z = h1.closest('main,article,[class*=product],[id*=product]') || document.body, t = z.innerText || '', i = Math.max(0, t.indexOf((h1.innerText || '').trim())); epuise = EPUISE.test(t.slice(i, i + 1500)); }
   // 18/11 : page de cours, de valeur des pièces, de cotation ou de rachat : les prix qu'elle montre ne sont pas des prix de vente (on suit seulement ses liens)
   const pageRef = /cours|valeur|cotation|rachat|vendre|revendre|estimation|\bspot\b|ankauf|verkaufen/i.test(decodeURIComponent(location.pathname));
