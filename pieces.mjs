@@ -56,17 +56,39 @@ export async function relevePieces(off = []){
 // les blocs « titre + lien + prix en € ». eBay (boutique /str/…) : recherche des pièces suivies dans la boutique, en
 // « Achat immédiat » seulement. La reconnaissance des pièces et le calcul de la prime sont faits ensuite par l'appli.
 function extrairePage(){
-  const prixRe = /(\d{1,3}(?:[ .  ]\d{3})*[.,]\d{2}|\d+[.,]\d{2}|\d{1,3}(?:[ .  ]\d{3})+|\d+)\s*(?:€|EUR)|(?:€|EUR)\s*(\d{1,3}(?:[ .,  ]\d{3})*(?:[.,]\d{2})?)/;
+  const VENDRE = /vous vendez|ajouter [àa] mes ventes|nous vous (l')?achetons|sell to us|we buy/i, ACHETER = /vous achetez|ajouter [àa] mes achats|ajouter au panier|add to cart|in den warenkorb/i;
+  // titres « vous achetez » / « vous vendez » de la page, dans l'ordre : un prix placé après un titre « vous vendez » (et avant le
+  // titre « vous achetez » suivant) est ce que la boutique te paie, pas ce que tu paies
+  const TITRES = []; { const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); let n; while((n = w.nextNode())){ const t = n.textContent; if(t.length > 200) continue; if(VENDRE.test(t)) TITRES.push([n, 'v']); else if(/vous achetez/i.test(t)) TITRES.push([n, 'a']); } }
+  const dernierTitre = e => { let lo = 0, hi = TITRES.length - 1, r = ''; while(lo <= hi){ const m = (lo + hi) >> 1; if(TITRES[m][0].compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING){ r = TITRES[m][1]; lo = m + 1; } else hi = m - 1; } return r; };
+  const EPUISE = /rupture de stock|en rupture|[ée]puis[ée]e?s?\b|\bindisponible|plus disponible|non disponible|pas disponible|bient[ôo]t disponible|hors stock|out of stock|sold out|currently unavailable|ausverkauft|nicht (mehr )?(verf[üu]gbar|lieferbar|auf lager)|agotado|esaurito|non disponibile|me pr[ée]venir|pr[ée]venez[- ]moi|m'avertir|alerte (de )?(disponibilit|retour en stock)|benachrichtig/i;
+  const PAS_ACHAT = /cotation|intrins|valeur (du |de l'|en )?m[ée]tal|valeur m[ée]tal|melt value|\bspot\b|^vente$|rachat|nous (vous )?rachetons|\breprise\b|ankauf|we buy|sell to us/i;
+  const prixRe = /(\d{1,3}(?:[ .,  ]\d{3})*[.,]\d{2}|\d+[.,]\d{2}|\d{1,3}(?:[ .  ]\d{3})+|\d+)\s*(?:€|EUR)|(?:€|EUR)\s*(\d{1,3}(?:[ .,  ]\d{3})*(?:[.,]\d{2})?)/;
   const lit = s => { s = String(s).replace(/[\s  ]/g, ''); if(/,\d{2}$/.test(s)) s = s.replace(/\./g, '').replace(',', '.'); else if(/\.\d{2}$/.test(s)) s = s.replace(/,/g, ''); else s = s.replace(/[.,]/g, ''); const v = parseFloat(s); return v > 0 && v < 200000 ? v : null; };
   const net = t => String(t || '').replace(/\s+/g, ' ').trim(), out = [];
   document.querySelectorAll('script[type="application/ld+json"]').forEach(sc => { try{
     const walk = o => { if(!o || typeof o !== 'object') return; if(Array.isArray(o)) return o.forEach(walk);
-      if(/Product/i.test([].concat(o['@type'] || []).join(' '))){ [].concat(o.offers || []).forEach(f => { [].concat(f.offers || f).forEach(g => { const v = parseFloat(g.price || g.lowPrice); if(v > 0 && (!g.priceCurrency || g.priceCurrency === 'EUR')) out.push({ t: net(o.name), prix: v, url: o.url || g.url || location.href }); }); }); }
+      if(/Product/i.test([].concat(o['@type'] || []).join(' '))){ [].concat(o.offers || []).forEach(f => { [].concat(f.offers || f).forEach(g => { if(/OutOfStock|SoldOut|Discontinued/i.test(String(g.availability || ''))) return; const v = parseFloat(g.price || g.lowPrice); if(v > 0 && (!g.priceCurrency || g.priceCurrency === 'EUR')) out.push({ t: net(o.name), prix: v, url: o.url || g.url || location.href }); }); }); }
       Object.values(o).forEach(walk); };
     walk(JSON.parse(sc.textContent)); }catch(e){} });
-  const feuilles = [...document.querySelectorAll('body *')].filter(e => e.children.length <= 3 && e.textContent.length < 50 && prixRe.test(e.textContent) && e.offsetParent !== null);
+  const feuilles = [...document.querySelectorAll('body *')].filter(e => e.children.length <= 3 && e.textContent.length < 600 && net(e.textContent).length < 50 && prixRe.test(e.textContent) && e.offsetParent !== null); // 18/11 : longueur sans les espaces (Geiger entoure ses prix de blancs)
   for(const e of feuilles.slice(0, 600)){
     if(/barr|strike|old|ancien|regular|was|uvp|statt/i.test((e.className || '') + ' ' + e.tagName) || e.closest('del,s,strike')) continue;
+    // 18/11 : l'étiquette écrite à côté du prix (le texte le plus proche qui n'est pas un prix) : la valeur du métal (« valeur intrinsèque »)
+    // et le prix auquel la boutique te RACHÈTE la pièce (« VENTE » seul, « rachat »…) ne sont pas des prix d'achat
+    // (seulement les mots tout près : le prix lui-même, ses voisins immédiats courts, puis le texte propre du bloc parent)
+    const sansPrix = t => net(t).replace(new RegExp(prixRe.source, 'g'), ' ').trim(), mot = t => /[a-zà-ÿ]{3,}/i.test(t);
+    let lab = sansPrix(e.textContent);
+    for(let x = e, i = 0; x && !mot(lab) && i < 2; i++, x = x.parentElement){
+      const v = [x.previousElementSibling, x.nextElementSibling].filter(y => y && y.textContent.length < 60).map(y => sansPrix(y.textContent)).join(' ');
+      const propre = x.parentElement ? sansPrix([...x.parentElement.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' ')) : '';
+      lab = (v + ' ' + propre).trim(); }
+    if(PAS_ACHAT.test(lab) || /€\s*\/\s*(kg|oz|g|once|gramme)\b/i.test(e.textContent)) continue;
+    // bloc « vous vendez » (ce que la boutique te paie) à côté d'un bloc « vous achetez » : on ne garde que le second
+    if(dernierTitre(e) === 'v') continue;
+    // bouton ou bloc marqué « vente / rachat » par sa classe, et colonne d'un tableau dont le titre est « valeur intrinsèque », « vente »…
+    { let x = e, mauvais = false; for(let i = 0; x && i < 4; i++, x = x.parentElement){ if(/(^|[-_ ])(sell|vente|rachat|ankauf|buyback|intrins)/i.test(typeof x.className === 'string' ? x.className : '')){ mauvais = true; break; } } if(mauvais) continue; }
+    { const td = e.closest('td'); const tb = td && td.closest('table'); if(tb){ const idx = [...td.parentElement.children].indexOf(td), tete = tb.querySelector('thead tr') || tb.querySelector('tr'); const h = tete && tete !== td.parentElement && tete.children[idx] ? net(tete.children[idx].textContent) : ''; if(h && (PAS_ACHAT.test(h) || VENDRE.test(h) || /^(vente|vendre|verkauf|rachat|prix de rachat)\b/i.test(h))) continue; } }
     let c = e, a = null;
     for(let i = 0; i < 7; i++){ c = c.parentElement; if(!c || c === document.body) break;
       const liens = [...c.querySelectorAll('a[href]')].filter(x => net(x.textContent).length > 8 && !/javascript:/.test(x.href));
@@ -78,12 +100,19 @@ function extrairePage(){
       const autres = new Set([...P.querySelectorAll('a[href]')].map(x => x.href.split('?')[0]).filter(u => u !== moi && /\/(itm|produit|product)\/|,a\.html|\/p\//.test(u)));
       if(autres.size) break; carte = P; }
     if(/\bench[eè]res?\b|\bmiser\b|e-auction|\bbids?\b|\bgebote?\b|offre la plus [ée]lev[ée]e|temps restant/i.test(carte.textContent)) continue;
+    // 18/11 : pièce pas disponible (rupture, épuisée…) : ne compte pas pour la prime la plus basse. On ne regarde que le bloc de CETTE
+    // annonce : on remonte tant que le bloc ne contient qu'un seul lien d'annonce différent et pas d'autre prix que les siens
+    { let bloc = c; for(let i = 0; i < 5; i++){ const P = bloc.parentElement; if(!P || P === document.body || P.textContent.length > 2500) break;
+        const L = new Set([...P.querySelectorAll('a[href]')].filter(x => net(x.textContent).length > 8).map(x => x.href.split(/[?#]/)[0])); if(L.size > 1) break;
+        const n = (net(P.textContent).match(new RegExp(prixRe.source, 'g')) || []).length; if(n > 4) break; bloc = P; }
+      if(EPUISE.test(bloc.textContent)) continue; }
     const m = e.textContent.match(prixRe), v = lit(m[1] || m[2]); if(!v) continue;
     let t = net(a.textContent); const h = c.querySelector('h1,h2,h3,h4,[class*=title],[class*=titre],[class*=name],[class*=nom]'); if(h && net(h.textContent).length > t.length && net(h.textContent).length < 220) t = net(h.textContent);
+    if(/^\s*(vendre|revendre|rachat|nous rachetons)\b/i.test(t)) continue;
     out.push({ t: t.slice(0, 220), prix: v, url: a.href });
   }
   // page d'un seul produit : le titre principal et le premier prix visible
-  const h1 = document.querySelector('h1'); if(h1 && !out.some(o => o.url === location.href)){ const z = h1.closest('main,article,[class*=product],[id*=product]') || document.body; const m = (z.innerText || '').match(prixRe); if(m){ const v = lit(m[1] || m[2]); if(v) out.push({ t: net(h1.textContent).slice(0, 220), prix: v, url: location.href }); } }
+  const h1 = document.querySelector('h1'); if(h1 && !out.some(o => o.url === location.href)){ const z = h1.closest('main,article,[class*=product],[id*=product]') || document.body; const txt = z.innerText || '', m = [...txt.matchAll(new RegExp(prixRe.source, 'g'))].find(x => { const av = txt.slice(Math.max(0, x.index - 160), x.index), dv = av.search(/vous vendez|mes ventes/i), da = av.search(/vous achetez|mes achats/i); const L = av.split(/\n/), ligne = (L.pop() || '') + ' ' + (/[a-zà-ÿ]{3,}/i.test(av.split(/\n/).pop() || '') ? '' : (L.filter(l => l.trim()).pop() || '')); return !PAS_ACHAT.test(ligne) && !/en temps r[ée]el|cours (de|du|et)/i.test(ligne) && !(dv >= 0 && dv > da); }); if(m && !EPUISE.test(txt.slice(Math.max(0, m.index - 400), m.index + 600))){ const v = lit(m[1] || m[2]); if(v) out.push({ t: net(h1.textContent).slice(0, 220), prix: v, url: location.href }); } }
   const liens = [...document.querySelectorAll('a[href]')].map(a => ({ u: a.href.split('#')[0], t: net(a.textContent).slice(0, 80) })).filter(l => /^https?:/.test(l.u));
   return { titre: document.title, produits: out, liens };
 }
