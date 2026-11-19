@@ -101,7 +101,9 @@ function extrairePage(){
     for(let i = 0; i < 4; i++){ const P = carte.parentElement; if(!P || P === document.body) break;
       const autres = new Set([...P.querySelectorAll('a[href]:not(svg *)')].map(x => x.href.split('?')[0]).filter(u => u !== moi && /\/(itm|produit|product)\/|,a\.html|\/p\//.test(u)));
       if(autres.size) break; carte = P; }
-    if(/\bench[eè]res?\b|\bmiser\b|e-auction|\bbids?\b|\bgebote?\b|offre la plus [ée]lev[ée]e|temps restant/i.test(carte.textContent)) continue;
+    // enchère → pas un prix d'achat. 19/11 : sur eBay le mot est collé au temps restant (« 191,00 EUR15 enchères6h 28m ») : plus de \b,
+    // et le temps restant seul (« 6h 28m », « 2j 5h ») suffit aussi à reconnaître une enchère
+    if(/ench[eè]res?|\bmiser\b|e-auction|\bbids?\b|\bgebote?\b|offre la plus [ée]lev[ée]e|temps restant/i.test(carte.textContent) || (/ebay\./.test(location.hostname) && /\d+\s?[jhd]\s?\d+\s?[hm](?![a-zà-ÿ])/i.test(carte.textContent))) continue;
     // 18/11 : pièce pas disponible (rupture, épuisée…) : ne compte pas pour la prime la plus basse. On ne regarde que le bloc de CETTE
     // annonce : on remonte tant que le bloc ne contient qu'un seul lien d'annonce différent et pas d'autre prix que les siens
     { let bloc = c; for(let i = 0; i < 5; i++){ const P = bloc.parentElement; if(!P || P === document.body || P.textContent.length > 2500) break;
@@ -168,9 +170,11 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
         // eBay refuse les recherches automatiques mais montre la boutique : on lit ses pages (enchères écartées)
         for(let pg = 1; pg <= 8; pg++){ if(Date.now() - ts > 90000) break;
           const u = pg === 1 ? S.url : `https://www.ebay.fr/str/${encodeURIComponent(eb[1])}?_pgn=${pg}`; // page 1 : l'adresse normale (les options déclenchent la vérification anti-robot)
-          let R; try{ R = await lirePage(ctx, u); }catch(e){ if(pg === 1) throw e; break; }
+          // 19/11 : eBay renvoie parfois une page d'erreur : un nouvel essai 6 s plus tard, et une page 1 ratée n'arrête plus la boutique
+          let R = null; for(let essai = 0; essai < 2 && !(R && R.produits.some(p => /\/itm\//.test(p.url))); essai++){ if(essai) await new Promise(r => setTimeout(r, 6000)); try{ R = await lirePage(ctx, u); }catch(e){ R = null; } }
+          if(!R){ if(pg >= 3 && !produits.length) throw new Error('boutique eBay injoignable'); continue; }
           const avant = produits.length; R.produits.filter(p => /\/itm\//.test(p.url)).forEach(p => produits.push({ ...p, url: p.url.split('?')[0] }));
-          if(produits.length === avant) break;
+          if(produits.length === avant && pg > 1) break;
         }
       } else {
         const file = [S.url], score = l => (mots.some(m => m.split(' ').filter(w => w.length > 3).every(w => (l.t + ' ' + l.u).toLowerCase().includes(w))) ? 5 : 0) + (MOTS_PIECES.test(l.t + ' ' + l.u) ? 1 : 0);
