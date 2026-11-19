@@ -316,6 +316,7 @@ try{
   // 17/10 : pièces dont la prime est anormalement basse (d'après l'historique des relevés précédents)
   try{ jour.affaires = await page.evaluate(() => { try{ return piecesAffaires(); }catch(e){ return null; } }); }catch(e){}
   try{ jour.cibles = await page.evaluate(() => { try{ return piecesCiblesAtteintes(); }catch(e){ return null; } }); }catch(e){} // 23/10 : tes prix cibles par pièce
+  try{ const t0 = Date.now(); jour.zonesOr = await page.evaluate(async () => { try{ return await zoAlertes(); }catch(e){ return null; } }); say(`zones d'or : ${jour.zonesOr ? jour.zonesOr.length + ' placement(s) dans une zone mensuelle' : 'calcul impossible'} (${Math.round((Date.now() - t0)/1000)} s)`); }catch(e){} // 19/11 : zones d'or mensuelles
   // 20/10 : analyse pro : feu de tendance des lignes suivies, tes lignes tracées franchies, retour dans un bloc d'ordres
   try{ jour.pro = await page.evaluate(async () => { try{ return await proAlertesRobot(); }catch(e){ return null; } }); }catch(e){}
   // 24/10 : scanner de marchés et rotation (une fois par jour, une soixantaine de marchés publics, rien de personnel)
