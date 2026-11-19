@@ -95,6 +95,7 @@ function extrairePage(){
       if(liens.length){ const n = (c.textContent.match(new RegExp(prixRe.source, 'g')) || []).length; if(n <= 4) a = liens.sort((x, y) => net(y.textContent).length - net(x.textContent).length)[0]; break; } }
     if(!a) continue;
     if(a.href.includes('#') && a.href.split('#')[0] === location.href.split('#')[0]) continue; // lien vers un passage de la même page (article)
+    { let ch = ''; try{ ch = decodeURIComponent(new URL(a.href).pathname); }catch(e){} if(/cours|valeur|cotation|rachat|vendre|revendre|estimation|ankauf|verkaufen/i.test(ch)) continue; } // 19/11 : lien vers une page de cours (bandeau des cours), pas une annonce
     // la « carte » entière de l'annonce (le plus grand bloc qui ne parle que de ce produit) : enchère → pas un prix d'achat
     let carte = c; const moi = a.href.split('?')[0];
     for(let i = 0; i < 4; i++){ const P = carte.parentElement; if(!P || P === document.body) break;
