@@ -61,7 +61,7 @@ function extrairePage(){
   // titre « vous achetez » suivant) est ce que la boutique te paie, pas ce que tu paies
   const TITRES = []; { const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); let n; while((n = w.nextNode())){ const t = n.textContent; if(t.length > 200) continue; if(VENDRE.test(t)) TITRES.push([n, 'v']); else if(/vous achetez/i.test(t)) TITRES.push([n, 'a']); } }
   const dernierTitre = e => { let lo = 0, hi = TITRES.length - 1, r = ''; while(lo <= hi){ const m = (lo + hi) >> 1; if(TITRES[m][0].compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING){ r = TITRES[m][1]; lo = m + 1; } else hi = m - 1; } return r; };
-  const EPUISE = /rupture de stock|en rupture|[ée]puis[ée]e?s?\b|\bindisponible|plus disponible|non disponible|pas disponible|bient[ôo]t disponible|hors stock|out of stock|sold out|currently unavailable|ausverkauft|nicht (mehr )?(verf[üu]gbar|lieferbar|auf lager)|agotado|esaurito|non disponibile|me pr[ée]venir|pr[ée]venez[- ]moi|m'avertir|alerte (de )?(disponibilit|retour en stock)|benachrichtig/i;
+  const EPUISE = /rupture de stock|en rupture|(n'est |n’est )?plus en stock|pas en stock|aucun stock|0 en stock|stock ?: ?0\b|plus en vente|n'est plus propos|d[ée]j[àa] vendue?s?\b|\bvendue?s? ?!|no longer available|not in stock|nicht vorr[äa]tig|nicht mehr erh[äa]ltlich|bereits verkauft|[ée]puis[ée]e?s?\b|\bindisponible|plus disponible|non disponible|pas disponible|bient[ôo]t disponible|hors stock|out of stock|sold out|currently unavailable|ausverkauft|nicht (mehr )?(verf[üu]gbar|lieferbar|auf lager)|agotado|esaurito|non disponibile|me pr[ée]venir|pr[ée]venez[- ]moi|m'avertir|alerte (de )?(disponibilit|retour en stock)|benachrichtig/i;
   const PAS_ACHAT = /(^|\s)cours\b(?!\s+(de\s+)?(commande|livraison|r[ée]appro))|cotation|intrins|valeur (du |de l'|en )?m[ée]tal|valeur m[ée]tal|melt value|\bspot\b|^vente$|rachat|nous (vous )?rachetons|\breprise\b|ankauf|we buy|sell to us/i;
   const prixRe = /(\d{1,3}(?:[ .,  ]\d{3})*[.,]\d{2}|\d+[.,]\d{2}|\d{1,3}(?:[ .  ]\d{3})+|\d+)\s*(?:€|EUR)|(?:€|EUR)\s*(\d{1,3}(?:[ .,  ]\d{3})*(?:[.,]\d{2})?)/;
   const lit = s => { s = String(s).replace(/[\s  ]/g, ''); if(/,\d{2}$/.test(s)) s = s.replace(/\./g, '').replace(',', '.'); else if(/\.\d{2}$/.test(s)) s = s.replace(/,/g, ''); else s = s.replace(/[.,]/g, ''); const v = parseFloat(s); return v > 0 && v < 200000 ? v : null; };
@@ -119,10 +119,45 @@ function extrairePage(){
   const h1 = document.querySelector('h1'); if(h1 && !out.some(o => o.url === location.href)){ const z = h1.closest('main,article,[class*=product],[id*=product]') || document.body; const txt = z.innerText || '', m = [...txt.matchAll(new RegExp(prixRe.source, 'g'))].find(x => { const av = txt.slice(Math.max(0, x.index - 160), x.index), dv = av.search(/vous vendez|mes ventes/i), da = av.search(/vous achetez|mes achats/i); const L = av.split(/\n/), ligne = (L.pop() || '') + ' ' + (/[a-zà-ÿ]{3,}/i.test(av.split(/\n/).pop() || '') ? '' : (L.filter(l => l.trim()).pop() || '')); return !PAS_ACHAT.test(ligne) && !/en temps r[ée]el|cours (de|du|et)/i.test(ligne) && !(dv >= 0 && dv > da); }); if(m && !EPUISE.test(txt.slice(Math.max(0, m.index - 400), m.index + 600))){ const v = lit(m[1] || m[2]); if(v) out.push({ t: net(h1.textContent).slice(0, 220), prix: v, url: location.href, fiche: 1 }); } }
   const liens = [...document.querySelectorAll('a[href]:not(svg *)')].map(a => ({ u: a.href.split('#')[0], t: net(a.textContent).slice(0, 80) })).filter(l => /^https?:/.test(l.u));
   let epuise = false; if(h1){ const z = h1.closest('main,article,[class*=product],[id*=product]') || document.body, t = z.innerText || '', i = Math.max(0, t.indexOf((h1.innerText || '').trim())); epuise = EPUISE.test(t.slice(i, i + 1500)); }
+  // 20/11 : page d'UN produit : sa disponibilité écrite pour les machines (balise schema.org « availability », Open Graph « product:availability »)
+  // compte aussi (pièce vendue dont le prix reste affiché)
+  { const A = [...document.querySelectorAll('[itemprop=availability]')].map(x => x.getAttribute('href') || x.getAttribute('content') || ''), og = document.querySelector('meta[property="product:availability"],meta[property="og:availability"]');
+    if(A.length === 1 && /OutOfStock|SoldOut|Discontinued/i.test(A[0])) epuise = true; if(og && /out.?of.?stock|oos|sold/i.test(og.getAttribute('content') || '')) epuise = true;
+    if(epuise) for(let i = out.length - 1; i >= 0; i--) if(out[i].fiche) out.splice(i, 1); }
   // 18/11 : page de cours, de valeur des pièces, de cotation ou de rachat : les prix qu'elle montre ne sont pas des prix de vente (on suit seulement ses liens)
   const pageRef = /cours|valeur|cotation|rachat|vendre|revendre|estimation|\bspot\b|ankauf|verkaufen/i.test(decodeURIComponent(location.pathname));
   return { titre: document.title, produits: pageRef ? [] : out, liens, epuise };
 }
+// ==== 20/11 (demande du propriétaire : « que rien ne soit raté ») : eBay par son API OFFICIELLE ====
+// Les pages d'une boutique eBay au-delà de la première affichent une vérification anti-robot (« Mesure de sécurité ») : le robot ne voyait que
+// les ~60 premières annonces. Règle du projet : on ne contourne pas un site qui bloque les robots. eBay propose une API officielle et gratuite
+// (Browse API, compte développeur eBay) : elle donne TOUTES les annonces « Achat immédiat » d'un vendeur. Clé : secret EBAY_CLE du dépôt carnet,
+// « App ID:Cert ID » (jamais écrite dans un fichier ni dans un journal). Sans clé : lecture de la 1re page comme avant, signalée « lue en partie ».
+let EBAY_TOK = null;
+export const ebayActif = () => /^[^:\s]+:[^:\s]+$/.test((process.env.EBAY_CLE || '').trim());
+async function ebayJeton(){ if(EBAY_TOK && EBAY_TOK.fin > Date.now() + 120000) return EBAY_TOK.t;
+  const r = await fetch('https://api.ebay.com/identity/v1/oauth2/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', authorization: 'Basic ' + Buffer.from((process.env.EBAY_CLE || '').trim()).toString('base64') },
+    body: 'grant_type=client_credentials&scope=' + encodeURIComponent('https://api.ebay.com/oauth/api_scope'), signal: AbortSignal.timeout(20000) });
+  if(!r.ok) throw new Error(`clé eBay refusée (${r.status})`); const j = await r.json(); EBAY_TOK = { t: j.access_token, fin: Date.now() + (j.expires_in || 7200)*1000 }; return EBAY_TOK.t; }
+async function ebayApi(chemin){ const t = await ebayJeton();
+  for(let essai = 0; essai < 3; essai++){ const r = await fetch('https://api.ebay.com/buy/browse/v1/' + chemin, { headers: { authorization: 'Bearer ' + t, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_FR', 'accept-language': 'fr-FR' }, signal: AbortSignal.timeout(25000) });
+    if(r.status === 404) return null; if(r.ok) return r.json(); if(r.status !== 429 && r.status < 500) throw new Error('API eBay ' + r.status); await new Promise(z => setTimeout(z, 3000*(essai + 1))); }
+  throw new Error('API eBay indisponible'); }
+// toutes les annonces « Achat immédiat » en euros d'un vendeur : catégorie Monnaies entière, puis or / argent / chaque pièce suivie (une annonce
+// rangée ailleurs est ainsi retrouvée) ; une même annonce n'est comptée qu'une fois
+export async function ebayVendeur(vendeur, mots = []){
+  const vus = new Map(), f = encodeURIComponent(`sellers:{${vendeur}},buyingOptions:{FIXED_PRICE}`);
+  let total = 0, appels = 0;
+  const balayer = async base => { for(let off = 0; off < 10000; off += 200){ const j = await ebayApi(`item_summary/search?${base}&filter=${f}&limit=200&offset=${off}`); appels++; const L = (j && j.itemSummaries) || [];
+    total += L.length; L.forEach(x => { const p = x.price || {}; if(p.currency === 'EUR' && +p.value > 0 && x.itemWebUrl) vus.set(x.itemId, { t: String(x.title || '').slice(0, 220), prix: +p.value, url: x.itemWebUrl.split('?')[0], api: 1 }); }); if(L.length < 200 || !j.next) break; } };
+  await balayer('category_ids=11116');
+  for(const q of [...new Set(['gold', 'or', 'silber', 'argent', 'silver', 'münze', ...mots.map(m => String(m).toLowerCase().replace(/\b(or|argent|1 ?oz)\b/g, '').trim()).filter(m => m.length > 2)])]) await balayer('q=' + encodeURIComponent(q));
+  return { produits: [...vus.values()], appels }; }
+// fiche d'une annonce eBay par l'API (prix et disponibilité), pour le triple contrôle
+async function ebayFiche(url){ const id = (String(url).match(/\/itm\/(?:[^/]+\/)?(\d{9,15})/) || [])[1]; if(!id) return null;
+  const j = await ebayApi('item/get_item_by_legacy_id?legacy_item_id=' + id); if(!j) return { lu: null, dispo: false };
+  const st = ((j.estimatedAvailabilities || [])[0] || {}).estimatedAvailabilityStatus || '', fin = j.itemEndDate && Date.parse(j.itemEndDate) < Date.now();
+  return { lu: j.price && j.price.currency === 'EUR' ? +j.price.value : null, dispo: !fin && !/OUT_OF_STOCK/i.test(st) && (j.buyingOptions || []).includes('FIXED_PRICE') }; }
 const PROTEGE = /just a moment|un instant|attention required|access denied|acc[eè]s refus|verifying|v[ée]rification de s[ée]curit[ée]|captcha|are you a robot|pardon our interruption|mesure de s[ée]curit[ée]|security measure/i;
 async function lirePage(ctx, url){
   const p = await ctx.newPage();
@@ -162,24 +197,33 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
   const ouvrier = async () => { while(suivant < sites.length && Date.now() - t0 <= budgetMs){ const S = sites[suivant++]; try{ await unSite(S); }catch(e){} } };
   const unSite = async S => {
     const h = hote(S.url); if(!h) return;
-    const ts = Date.now(), produits = [], vus = new Set(); let err = null;
+    const ts = Date.now(), produits = [], vus = new Set(); let err = null, cov = null;
     try{
       const RR = await reglesRobots(h); if(!autorise(RR, S.url)) throw new Error('ce site refuse les robots (robots.txt)');
       const eb = S.url.match(/ebay\.[a-z.]+\/str\/([^/?#]+)/i);
-      if(eb){
+      let apiFait = false, apiErr = null;
+      if(eb && ebayActif()){ try{
+        const R = await ebayVendeur(decodeURIComponent(eb[1]), conf.mots || []); R.produits.forEach(p => produits.push(p));
+        cov = { mode: 'api', complet: true, annonces: R.produits.length }; apiFait = true;
+        if(!R.produits.length) err = 'aucune annonce « Achat immédiat » trouvée pour ce vendeur (nom du vendeur différent de celui de la boutique ?)';
+      }catch(e){ apiErr = String(e.message || e).slice(0, 60); } }
+      if(eb && !apiFait){
         // eBay refuse les recherches automatiques mais montre la boutique : on lit ses pages (enchères écartées)
+        cov = { mode: 'pages', complet: false, pages: 0, bloque: false, apiErr };
         for(let pg = 1; pg <= 8; pg++){ if(Date.now() - ts > 90000) break;
           const u = pg === 1 ? S.url : `https://www.ebay.fr/str/${encodeURIComponent(eb[1])}?_pgn=${pg}`; // page 1 : l'adresse normale (les options déclenchent la vérification anti-robot)
           // 19/11 : eBay renvoie parfois une page d'erreur : un nouvel essai 6 s plus tard, et une page 1 ratée n'arrête plus la boutique
-          let R = null; for(let essai = 0; essai < 2 && !(R && R.produits.some(p => /\/itm\//.test(p.url))); essai++){ if(essai) await new Promise(r => setTimeout(r, 6000)); try{ R = await lirePage(ctx, u); }catch(e){ R = null; } }
+          let R = null, protege = false; for(let essai = 0; essai < 2 && !(R && R.produits.some(p => /\/itm\//.test(p.url))); essai++){ if(essai) await new Promise(r => setTimeout(r, 6000)); try{ R = await lirePage(ctx, u); }catch(e){ R = null; protege = /protégé/.test(e.message); } }
+          if(!R && protege){ cov.bloque = true; break; } // 20/11 : vérification anti-robot d'eBay (« Mesure de sécurité ») : on s'arrête, jamais contournée
           if(!R){ if(pg >= 3 && !produits.length) throw new Error('boutique eBay injoignable'); continue; }
-          const avant = produits.length; R.produits.filter(p => /\/itm\//.test(p.url)).forEach(p => produits.push({ ...p, url: p.url.split('?')[0] }));
-          if(produits.length === avant && pg > 1) break;
+          cov.pages = pg; if(!R.produits.length && !R.liens.some(l => /\/itm\//.test(l.u))){ cov.complet = true; break; }
+          R.produits.filter(p => /\/itm\//.test(p.url)).forEach(p => produits.push({ ...p, url: p.url.split('?')[0] }));
         }
       } else {
         const file = [S.url], score = l => (mots.some(m => m.split(' ').filter(w => w.length > 3).every(w => (l.t + ' ' + l.u).toLowerCase().includes(w))) ? 5 : 0) + (MOTS_PIECES.test(l.t + ' ' + l.u) ? 1 : 0);
         let n = 0;
-        while(file.length && n < 13 && Date.now() - ts < 80000){
+        // 20/11 : jusqu'à 20 pages (avant 13) ; ce qui reste à lire est noté (site « lu en partie », affiché dans Mes sites)
+        while(file.length && n < 20 && Date.now() - ts < 100000){
           const u = file.shift(); if(vus.has(u) || !autorise(RR, u)) continue; vus.add(u); n++;
           let R; try{ R = await lirePage(ctx, u); }catch(e){ if(n === 1) throw e; continue; }
           R.produits.forEach(p => produits.push(p));
@@ -188,13 +232,14 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
           file.sort((a, b) => score(nouveaux.find(l => l.u === b) || { t: '', u: b }) - score(nouveaux.find(l => l.u === a) || { t: '', u: a }));
         }
       }
+      if(!eb) cov = { mode: 'pages', pages: n, reste: file.filter(u => !vus.has(u)).length, complet: !file.some(u => !vus.has(u)) };
       if(!produits.length && !err) err = 'aucun prix trouvé sur ce site';
     }catch(e){ err = String(e.message || e).slice(0, 80); }
     // 18/11 : quand la FICHE d'un produit a été lue, son prix fait foi : les autres prix lus ailleurs pour la même adresse (page « valeur des
     // pièces », bandeau, comparatif…) sont écartés s'ils s'en éloignent de plus de 2 %
     const sansAncre = u => String(u || '').split('#')[0].split('?')[0], fiches = {}; produits.forEach(p => { if(p.fiche) fiches[sansAncre(p.url)] = p.prix; });
     const uniq = []; const cle = new Set(); produits.forEach(p => { const f = fiches[sansAncre(p.url)]; if(f != null && !p.fiche && Math.abs(p.prix - f)/f > 0.02) return; const k = p.url + '|' + p.prix; if(!cle.has(k) && p.t){ cle.add(k); uniq.push(p); } });
-    res[cleSite(S.url)] = { nom: S.nom || h, url: S.url, err: uniq.length ? null : err, produits: uniq.slice(0, 1500) };
+    res[cleSite(S.url)] = { nom: S.nom || h, url: S.url, err: uniq.length ? null : err, produits: uniq.slice(0, 3000), cov };
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(parallele, sites.length)) }, ouvrier));
   return res;
@@ -284,7 +329,8 @@ export async function verifierOffres(ctx, liste, ancien = {}, parallele = 6, bud
   const t0 = Date.now(), verif = { ...ancien }; let n = 0, ko = 0, i = 0;
   for(const [u, v] of Object.entries(verif)) if(Date.now() - (v.at || 0) > 7*86400000) delete verif[u]; // ménage : plus d'une semaine
   const un = async o => { const h = hote(o.url); if(!h) return; let r = { at: Date.now(), prix: o.prix, lu: null, dispo: true, ok: false, err: null };
-    try{ const RR = await reglesRobots(h); if(!autorise(RR, o.url)) throw new Error('refuse les robots');
+    try{ if(/ebay\./.test(h) && ebayActif()){ const F = await ebayFiche(o.url); if(F){ r.lu = F.lu; r.dispo = F.dispo; r.ok = r.dispo && r.lu != null && Math.abs(r.lu - o.prix)/o.prix <= 0.03; verif[o.url] = r; n++; if(!r.ok) ko++; return; } }
+      const RR = await reglesRobots(h); if(!autorise(RR, o.url)) throw new Error('refuse les robots');
       const R = await lirePage(ctx, o.url), page = o.url.split(/[?#]/)[0];
       const P = R.produits.filter(x => x.prix > 0), meme = P.filter(x => x.url.split(/[?#]/)[0] === page), cands = meme.length ? meme : P;
       const best = cands.map(x => x.prix).sort((a, b) => Math.abs(a - o.prix) - Math.abs(b - o.prix))[0];

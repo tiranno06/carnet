@@ -67,6 +67,8 @@ jobs:
         run: node robot.mjs
         env:
           MOT_DE_PASSE: ${{ secrets.MOT_DE_PASSE }}
+          # 20/11 : clé de l'API officielle d'eBay (« App ID:Cert ID »), facultative : toutes les annonces des boutiques eBay suivies
+          EBAY_CLE: ${{ secrets.EBAY_CLE }}
       # 07/11 : une publication a pu arriver pendant le passage : on reprend la toute dernière appli publiée
       # (sinon le robot remettrait l'ancienne en ligne jusqu'au passage suivant)
       - name: Dernière version publiée de l'appli

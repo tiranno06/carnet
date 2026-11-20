@@ -161,7 +161,7 @@ try{
       const P = avant; P.sites = P.sites || {}; let nS = 0;
       const R = await releveSitesUtilisateur(page.context(), { ...conf, sites: aRefaire }, P.sites, 100000, 6);
       for(const [h, r] of Object.entries(R)){ const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
-        P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : ((P.sites[h] || {}).offres || []) }; nS++;
+        P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, cov: r.cov || null, offres: offres.length ? offres : ((P.sites[h] || {}).offres || []) }; nS++;
         say(`pièces — site personnel relu : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); }
       await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P));
     }
@@ -174,7 +174,7 @@ try{
         for(const [h, r] of Object.entries(R)){
           const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
           const ancien = P.sites[h] || {};
-          P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, offres: offres.length ? offres : (r.err ? (ancien.offres || []) : []) };
+          P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, cov: r.cov || null, offres: offres.length ? offres : (r.err ? (ancien.offres || []) : []) };
           nS++; say(`pièces — site personnel n°${nS} : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); // jamais le nom du site : le journal est public
         }
       }
