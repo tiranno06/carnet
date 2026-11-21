@@ -135,7 +135,10 @@ function extrairePage(){
 // « App ID:Cert ID » (jamais écrite dans un fichier ni dans un journal). Sans clé : lecture de la 1re page comme avant, signalée « lue en partie ».
 let EBAY_TOK = null;
 export const ebayActif = () => /^[^:\s]+:[^:\s]+$/.test((process.env.EBAY_CLE || '').trim());
-async function ebayJeton(){ if(EBAY_TOK && EBAY_TOK.fin > Date.now() + 120000) return EBAY_TOK.t;
+let EBAY_TOK_P = null;
+// 21/11 : une seule demande de jeton à la fois (6 lectures en parallèle demandaient chacune un jeton : un refus 401 a été vu)
+function ebayJeton(){ if(EBAY_TOK && EBAY_TOK.fin > Date.now() + 120000) return Promise.resolve(EBAY_TOK.t); if(!EBAY_TOK_P) EBAY_TOK_P = ebayJetonNeuf().finally(() => { EBAY_TOK_P = null; }); return EBAY_TOK_P; }
+async function ebayJetonNeuf(){
   const r = await fetch('https://api.ebay.com/identity/v1/oauth2/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', authorization: 'Basic ' + Buffer.from((process.env.EBAY_CLE || '').trim()).toString('base64') },
     body: 'grant_type=client_credentials&scope=' + encodeURIComponent('https://api.ebay.com/oauth/api_scope'), signal: AbortSignal.timeout(20000) });
   if(!r.ok) throw new Error(`clé eBay refusée (${r.status})`); const j = await r.json(); EBAY_TOK = { t: j.access_token, fin: Date.now() + (j.expires_in || 7200)*1000 }; return EBAY_TOK.t; }
@@ -149,19 +152,24 @@ export async function ebayVendeur(vendeur, mots = [], limiteMs = 75000){
   // 21/11 : temps limité (75 s par boutique) : d'abord une recherche par pièce suivie (peu d'annonces, l'essentiel), puis toute la catégorie
   // Monnaies du vendeur tant qu'il reste du temps ; « complet » seulement si tout a été parcouru
   const t0 = Date.now(), vus = new Map(), f = encodeURIComponent(`sellers:{${vendeur}},buyingOptions:{FIXED_PRICE}`);
-  let appels = 0, complet = true, total = 0;
+  let appels = 0, complet = true, total = 0, autres = 0;
   const balayer = async base => { for(let off = 0; off < 10000; off += 200){ if(Date.now() - t0 > limiteMs){ complet = false; return; }
     const j = await ebayApi(`item_summary/search?${base}&filter=${f}&limit=200&offset=${off}`); appels++; const L = (j && j.itemSummaries) || [];
     if(base.startsWith('category')) total = (j && j.total) || total;
-    L.forEach(x => { const p = x.price || {}; if(p.currency === 'EUR' && +p.value > 0 && x.itemWebUrl) vus.set(x.itemId, { t: String(x.title || '').slice(0, 220), prix: +p.value, url: x.itemWebUrl.split('?')[0], api: 1 }); });
+    L.forEach(x => { const p = x.price || {}; if(String((x.seller || {}).username || '').toLowerCase() !== vendeur.toLowerCase()) { autres++; return; } if(p.currency === 'EUR' && +p.value > 0 && x.itemWebUrl) vus.set(x.itemId, { t: String(x.title || '').slice(0, 220), prix: +p.value, url: x.itemWebUrl.split('?')[0], api: 1 }); });
     if(L.length < 200 || !j.next) return; } };
   for(const q of [...new Set(mots.map(m => String(m).toLowerCase().replace(/\b(or|argent|1 ?oz)\b/g, ' ').replace(/\s+/g, ' ').trim()).filter(m => m.length > 2))]) await balayer('q=' + encodeURIComponent(q));
   await balayer('category_ids=11116');
-  return { produits: [...vus.values()], appels, complet, total }; }
+  return { produits: [...vus.values()], appels, complet, total, autres }; }
 // 21/11 : état de la clé, pour le journal du robot (jamais la clé elle-même)
 export async function ebayTester(){ if(!(process.env.EBAY_CLE || '').trim()) return 'absente (boutiques eBay lues en partie)'; if(!ebayActif()) return 'mal écrite (attendu « App ID:Cert ID », sans espace)';
   try{ await ebayJeton(); const j = await ebayApi('item_summary/search?q=gold&limit=1'); return j ? `acceptée ✅ (API joignable, ${j.total || 0} annonces « gold » sur eBay France)` : 'acceptée, mais recherche vide'; }catch(e){ return 'refusée : ' + String(e.message || e).slice(0, 80); } }
 // fiche d'une annonce eBay par l'API (prix et disponibilité), pour le triple contrôle
+// 21/11 : le nom de la boutique (adresse /str/…) n'est pas toujours le pseudo du vendeur, et eBay IGNORE un filtre de vendeur inconnu
+// (il renvoyait alors des annonces de tout eBay) : le pseudo est lu sur une annonce de la boutique (page 1, lisible), puis chaque annonce
+// reçue est contrôlée (même vendeur) avant d'être gardée
+export async function ebayPseudo(urlAnnonce){ const id = (String(urlAnnonce).match(/\/itm\/(?:[^/]+\/)?(\d{9,15})/) || [])[1]; if(!id) return null;
+  const j = await ebayApi('item/get_item_by_legacy_id?legacy_item_id=' + id); return (j && j.seller && j.seller.username) || null; }
 async function ebayFiche(url){ const id = (String(url).match(/\/itm\/(?:[^/]+\/)?(\d{9,15})/) || [])[1]; if(!id) return null;
   const j = await ebayApi('item/get_item_by_legacy_id?legacy_item_id=' + id); if(!j) return { lu: null, dispo: false };
   const st = ((j.estimatedAvailabilities || [])[0] || {}).estimatedAvailabilityStatus || '', fin = j.itemEndDate && Date.parse(j.itemEndDate) < Date.now();
@@ -211,9 +219,14 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
       const eb = S.url.match(/ebay\.[a-z.]+\/str\/([^/?#]+)/i);
       let apiFait = false, apiErr = null;
       if(eb && ebayActif()){ try{
-        const R = await ebayVendeur(decodeURIComponent(eb[1]), conf.motsEbay || conf.mots || []); R.produits.forEach(p => produits.push(p));
-        cov = { mode: 'api', complet: R.complet, annonces: R.produits.length, total: R.total }; apiFait = true;
-        if(!R.produits.length) err = 'aucune annonce « Achat immédiat » trouvée pour ce vendeur (nom du vendeur différent de celui de la boutique ?)';
+        // pseudo du vendeur : gardé du passage précédent, sinon lu sur une annonce de la page 1 de la boutique
+        let pseudo = ((anciens[cleSite(S.url)] || {}).cov || {}).pseudo || null;
+        if(!pseudo){ let R1 = null; try{ R1 = await lirePage(ctx, S.url); }catch(e){}
+          for(const l of ((R1 && R1.liens) || []).filter(l => /\/itm\//.test(l.u)).slice(0, 3)){ try{ pseudo = await ebayPseudo(l.u); }catch(e){} if(pseudo) break; } }
+        if(!pseudo) throw new Error('pseudo du vendeur introuvable');
+        const R = await ebayVendeur(pseudo, conf.motsEbay || conf.mots || []); R.produits.forEach(p => produits.push(p));
+        cov = { mode: 'api', pseudo, complet: R.complet, annonces: R.produits.length, total: R.total, autres: R.autres }; apiFait = true;
+        if(!R.produits.length) err = 'aucune annonce « Achat immédiat » trouvée pour ce vendeur';
       }catch(e){ apiErr = String(e.message || e).slice(0, 60); } }
       if(eb && !apiFait){
         // eBay refuse les recherches automatiques mais montre la boutique : on lit ses pages (enchères écartées)

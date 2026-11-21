@@ -159,7 +159,7 @@ try{
     // s'il a plus de 8 h (une minute environ) ; ainsi chaque site est relu environ deux fois par jour sans allonger beaucoup le passage
     // 18/11 (relevé le plus rapide possible) : les 6 sites les plus anciennement lus (plus de 2 h), lus en même temps (environ 1 min 30)
     // 20/11 : clé de l'API d'eBay présente : une boutique eBay pas encore lue par l'API (donc lue en partie) est relue tout de suite
-    if(!complet && conf && ebayActif()){ const deja = new Set(aRefaire.map(hoteDe)); conf.sites.filter(x => /ebay\.[a-z.]+\/str\//i.test(x.url) && !deja.has(hoteDe(x)) && (((avant.sites || {})[hoteDe(x)] || {}).cov || {}).mode !== 'api').forEach(x => aRefaire.push(x)); }
+    if(!complet && conf && ebayActif()){ const deja = new Set(aRefaire.map(hoteDe)); conf.sites.filter(x => /ebay\.[a-z.]+\/str\//i.test(x.url) && !deja.has(hoteDe(x)) && !(((avant.sites || {})[hoteDe(x)] || {}).cov || {}).pseudo).forEach(x => aRefaire.push(x)); }
     if(!complet && conf){ const deja = new Set(aRefaire.map(hoteDe)); const vieux = conf.sites.filter(x => !deja.has(hoteDe(x))).map(x => [x, ((avant.sites || {})[hoteDe(x)] || {}).at || 0]).filter(([, t]) => Date.now() - t > 2*3600000).sort((a, b) => a[1] - b[1]); vieux.slice(0, Math.max(0, 6 - aRefaire.length)).forEach(([x]) => aRefaire.push(x)); }
     if(aRefaire.length){
       const P = avant; P.sites = P.sites || {}; let nS = 0;
