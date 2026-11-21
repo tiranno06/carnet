@@ -183,6 +183,8 @@ async function ebayFiche(url){ const id = (String(url).match(/\/itm\/(?:[^/]+\/)
   const j = await ebayApi('item/get_item_by_legacy_id?legacy_item_id=' + id); if(!j) return { lu: null, dispo: false };
   const st = ((j.estimatedAvailabilities || [])[0] || {}).estimatedAvailabilityStatus || '', fin = j.itemEndDate && Date.parse(j.itemEndDate) < Date.now();
   return { lu: j.price && j.price.currency === 'EUR' ? +j.price.value : null, dispo: !fin && !/OUT_OF_STOCK/i.test(st) && (j.buyingOptions || []).includes('FIXED_PRICE') }; }
+// 22/11 : recherches limitées à la catégorie Monnaies d'eBay (11116) : sans elle, « souverain » ramenait une porte de voiture « Sovereign »,
+// « 20 francs » un timbre ; la catégorie de chaque annonce est gardée (cat) et contrôlée par l'appli.
 // ==== 21/11 (demande du propriétaire : section « Offres eBay ») : chaque pièce suivie cherchée sur TOUT eBay (France et eBay voisins),
 // annonces livrables en France, envoyées depuis l'Union européenne, avec frais de port vers la France, réputation du vendeur, enchères à part.
 // La reconnaissance des pièces, les filtres de confiance et les calculs sont faits ensuite par l'appli (ebayEnregistrer, 11g).
@@ -196,7 +198,7 @@ export function ebayResume(x, mp){ if(!x) return null; const B = x.buyingOptions
   if(cur !== 'EUR' || !(prix > 0) || !x.itemWebUrl) return null;
   return { t: String(x.title || '').slice(0, 200), prix, port: sc.currency === 'EUR' && sc.value != null ? +sc.value : null, url: ebayUrlFr(x.itemWebUrl), v: String(s.username || ''),
     fb: s.feedbackPercentage != null ? +s.feedbackPercentage : null, n: s.feedbackScore != null ? +s.feedbackScore : null, pays: String((x.itemLocation || {}).country || ''), mp, ench: ench ? 1 : 0,
-    fin: ench ? (x.itemEndDate || null) : null, img: ((x.image || {}).imageUrl) || null }; }
+    fin: ench ? (x.itemEndDate || null) : null, img: ((x.image || {}).imageUrl) || null, cat: (x.categories || []).map(c => c.categoryName).filter(Boolean).join(' / ').slice(0, 120) }; }
 // fiche complète d'une annonce (lien collé par le propriétaire, contrôle de disponibilité)
 export async function ebayFicheComplete(url){ const id = (String(url).match(/\/itm\/(?:[^/]+\/)?(\d{9,15})/) || [])[1]; if(!id) return { err: "ce n'est pas le lien d'une annonce eBay (…/itm/…)" };
   const j = await ebayApi('item/get_item_by_legacy_id?legacy_item_id=' + id); if(!j) return { err: 'annonce introuvable ou terminée', dispo: false };
@@ -216,7 +218,7 @@ export async function ebayMarche(conf, avant = {}, budgetMs = 110000){
     const neuf = new Map(); let i = 0;
     const ouvrier = async () => { while(i < choix.length && Date.now() - t0 < budgetMs*0.5){ const [P, q, mp] = choix[i++]; if(!q) continue;
       const prixF = P.min > 0 ? `,price:%5B${Math.floor(P.min)}..${Math.ceil(P.max || P.min*3)}%5D,priceCurrency:EUR` : '';
-      try{ const j = await ebayApi(`item_summary/search?q=${encodeURIComponent(q)}&filter=buyingOptions:%7BFIXED_PRICE%7CAUCTION%7D,deliveryCountry:FR${prixF}&sort=newlyListed&limit=50`, mp); R.appels++;
+      try{ const j = await ebayApi(`item_summary/search?q=${encodeURIComponent(q)}&category_ids=11116&filter=buyingOptions:%7BFIXED_PRICE%7CAUCTION%7D,deliveryCountry:FR${prixF}&sort=newlyListed&limit=50`, mp); R.appels++;
         ((j && j.itemSummaries) || []).forEach(x => { const o = ebayResume(x, mp); if(o && EBAY_UE.has(o.pays)) neuf.set(x.itemId || o.url, o); }); }catch(e){} } };
     await Promise.all(Array.from({ length: 6 }, ouvrier));
     R.nouveaux = [...neuf.values()]; R.balaye = n; }
@@ -225,7 +227,7 @@ export async function ebayMarche(conf, avant = {}, budgetMs = 110000){
     const brut = new Map(); let i = 0, finies = 0, err = 0;
     const ouvrier = async () => { while(i < taches.length && Date.now() - t0 < budgetMs*0.7){ const [P, q, mp] = taches[i++];
       const prixF = P.min > 0 ? `,price:%5B${Math.floor(P.min)}..${Math.ceil(P.max || P.min*3)}%5D,priceCurrency:EUR` : '';
-      try{ const j = await ebayApi(`item_summary/search?q=${encodeURIComponent(q)}&filter=buyingOptions:%7BFIXED_PRICE%7CAUCTION%7D,deliveryCountry:FR${prixF}&sort=price&limit=100`, mp); R.appels++;
+      try{ const j = await ebayApi(`item_summary/search?q=${encodeURIComponent(q)}&category_ids=11116&filter=buyingOptions:%7BFIXED_PRICE%7CAUCTION%7D,deliveryCountry:FR${prixF}&sort=price&limit=100`, mp); R.appels++;
         ((j && j.itemSummaries) || []).forEach(x => { const o = ebayResume(x, mp); if(o && EBAY_UE.has(o.pays)) brut.set(x.itemId || o.url, o); }); finies++; }catch(e){ err++; } } };
     await Promise.all(Array.from({ length: 6 }, ouvrier));
     R.brut = [...brut.values()]; R.complet = finies === taches.length; R.taches = taches.length; R.finies = finies; R.erreurs = err;
