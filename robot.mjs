@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
 import { relevePieces, releveSitesUtilisateur, verifierLivraison, releveFraisComparateur, verifierOffres, cleSite, ebayActif, ebayTester, ebayMarche } from './pieces.mjs';
-import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux, releveImmo } from './donnees-plus.mjs';
+import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux, releveImmo, releveAmpleur, releveBofa } from './donnees-plus.mjs';
 
 const t0 = Date.now();
 const say = m => console.log(`[${Math.round((Date.now()-t0)/1000)} s] ${m}`);
@@ -215,6 +215,11 @@ try{
     if(!O.etf || Date.now() - O.etf.at > 20*3600000){ try{ O.etf = await releveOrEtf(); neuf = true; }catch(e){ say('or des ETF : ' + e.message); } }
     if(!O.eu || Date.now() - O.eu.at > 20*3600000){ try{ O.eu = await releveEurope(); neuf = true; }catch(e){ say('Europe (INSEE, BCE) : ' + e.message); } }
     if(!O.def || Date.now() - O.def.at > 20*3600000){ try{ O.def = await releveDefaillances(); neuf = true; }catch(e){ say('défaillances d\'entreprises : ' + e.message); } }
+    // 22/11 : signaux de capitulation du cours « Le marnage » (reprise générale des actions, liquidités des gérants), une fois par jour
+    if(!O.creux || Date.now() - (O.creux.at || 0) > 20*3600000){ const C = { ...(O.creux || {}), at: Date.now() };
+      try{ C.ampleur = await releveAmpleur(); }catch(e){ say('reprise générale des actions : ' + e.message); }
+      try{ const b = await releveBofa(); if(b.cash != null || !C.bofa || C.bofa.cash == null || Date.now() - C.bofa.at > 40*86400000) C.bofa = b; else C.bofa.vu = Date.now(); }catch(e){ say('liquidités des gérants (presse) : ' + String(e.message).slice(0, 60)); }
+      O.creux = C; neuf = true; }
     // 23/10 : nouvelles données (taux, INSEE, carburants, or de Shanghai et de Londres, crypto), chacune une fois par jour
     try{ const N = await releveNouveaux(O.nv); if(JSON.stringify(N.o) !== JSON.stringify(O.nv || {})){ O.nv = N.o; neuf = true; } if(N.err.length) say('nouvelles données : ' + N.err.join(' ; ')); }catch(e){ say('nouvelles données : relevé impossible'); }
     if(neuf) await ecrit('mt_or_plus', O);

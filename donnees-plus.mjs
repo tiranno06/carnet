@@ -444,3 +444,29 @@ async function licReleve(p){
   if(!Object.keys(m).length) throw new Error('Challenger : format changé');
   return { m, pg, plein };
 }
+
+// ---- 22/11 : signaux de capitulation du cours « Le marnage » (cadre « creux du marché » de l'accueil), relevés une fois par jour ----
+// 1. reprise générale : part des 100 plus grandes actions américaines au-dessus de leur moyenne de 50 jours, jour par jour (cours Yahoo)
+const GRANDES_US = ['AAPL','MSFT','NVDA','AMZN','GOOGL','META','BRK-B','AVGO','TSLA','LLY','JPM','V','XOM','UNH','MA','JNJ','PG','HD','COST','ABBV','WMT','NFLX','BAC','CRM','KO','CVX','MRK','ORCL','AMD','PEP',
+  'ADBE','TMO','LIN','ACN','MCD','CSCO','WFC','ABT','IBM','DHR','GE','PM','INTU','TXN','QCOM','CAT','AMGN','VZ','DIS','NOW','ISRG','AXP','GS','NEE','UBER','PFE','MS','T','RTX','SPGI','CMCSA','LOW','HON',
+  'UNP','BKNG','BLK','SCHW','COP','PLD','ELV','SYK','LMT','TJX','BA','C','DE','MDT','GILD','ADP','MO','SO','DUK','CVS','USB','BMY','MMM','PYPL','INTC','SBUX','CL','MDLZ','TGT','GD','EMR','FDX','KHC','MET','AIG','CHTR','NKE'];
+export async function releveAmpleur(){
+  const res = new Array(GRANDES_US.length); let i = 0;
+  const un = async () => { while(i < GRANDES_US.length){ const k = i++; try{ const j = JSON.parse(await lire(`https://query1.finance.yahoo.com/v8/finance/chart/${GRANDES_US[k]}?range=8mo&interval=1d`)); const r = j.chart.result[0], c = r.indicators.quote[0].close;
+    res[k] = r.timestamp.map((x, n) => [new Date(x*1000).toISOString().slice(0, 10), c[n]]).filter(x => x[1] > 0); }catch(e){ res[k] = null; } } };
+  await Promise.all(Array.from({ length: 8 }, un));
+  const ok = res.filter(s => s && s.length > 60); if(ok.length < 70) throw new Error(`cours de ${ok.length} actions seulement`);
+  const jours = [...new Set(ok.flatMap(s => s.slice(-60).map(x => x[0])))].sort().slice(-60);
+  const hist = jours.map(d => { let n = 0, a = 0; ok.forEach(s => { const i = s.findIndex(x => x[0] === d); if(i >= 49){ const m = s.slice(i - 49, i + 1).reduce((t, x) => t + x[1], 0) / 50; n++; if(s[i][1] > m) a++; } });
+    return [d, n ? Math.round(a / n * 1000) / 10 : null, n]; }).filter(x => x[1] != null && x[2] >= 60);
+  return { at: Date.now(), hist, n: ok.length };
+}
+// 2. liquidités des gérants (enquête mensuelle de Bank of America, pas publiée librement) : le chiffre cité dans les titres de presse des
+// 45 derniers jours (GDELT, base publique d'articles faite pour la lecture automatique) ; rien d'inventé : pas de chiffre trouvé = inconnu
+export async function releveBofa(){
+  const q = encodeURIComponent('"fund manager survey" cash');
+  const A = (JSON.parse(await lire(`https://api.gdeltproject.org/api/v2/doc/doc?query=${q}&mode=artlist&maxrecords=100&timespan=45d&format=json&sort=datedesc`)).articles || []);
+  for(const a of A){ const t = String(a.title || ''); const m = t.match(/cash[^%\d]{0,45}(\d(?:[.,]\d)?)\s?%/i) || t.match(/(\d(?:[.,]\d)?)\s?%\s*(?:in\s+|of\s+)?cash/i);
+    if(m){ const v = parseFloat(m[1].replace(',', '.')); if(v >= 2 && v <= 8) return { at: Date.now(), cash: v, titre: t.slice(0, 160), source: String(a.domain || ''), date: String(a.seendate || '').slice(0, 8) }; } }
+  return { at: Date.now(), cash: null, lus: A.length };
+}
