@@ -145,14 +145,19 @@ async function ebayApi(chemin){ const t = await ebayJeton();
   throw new Error('API eBay indisponible'); }
 // toutes les annonces « Achat immédiat » en euros d'un vendeur : catégorie Monnaies entière, puis or / argent / chaque pièce suivie (une annonce
 // rangée ailleurs est ainsi retrouvée) ; une même annonce n'est comptée qu'une fois
-export async function ebayVendeur(vendeur, mots = []){
-  const vus = new Map(), f = encodeURIComponent(`sellers:{${vendeur}},buyingOptions:{FIXED_PRICE}`);
-  let total = 0, appels = 0;
-  const balayer = async base => { for(let off = 0; off < 10000; off += 200){ const j = await ebayApi(`item_summary/search?${base}&filter=${f}&limit=200&offset=${off}`); appels++; const L = (j && j.itemSummaries) || [];
-    total += L.length; L.forEach(x => { const p = x.price || {}; if(p.currency === 'EUR' && +p.value > 0 && x.itemWebUrl) vus.set(x.itemId, { t: String(x.title || '').slice(0, 220), prix: +p.value, url: x.itemWebUrl.split('?')[0], api: 1 }); }); if(L.length < 200 || !j.next) break; } };
+export async function ebayVendeur(vendeur, mots = [], limiteMs = 75000){
+  // 21/11 : temps limité (75 s par boutique) : d'abord une recherche par pièce suivie (peu d'annonces, l'essentiel), puis toute la catégorie
+  // Monnaies du vendeur tant qu'il reste du temps ; « complet » seulement si tout a été parcouru
+  const t0 = Date.now(), vus = new Map(), f = encodeURIComponent(`sellers:{${vendeur}},buyingOptions:{FIXED_PRICE}`);
+  let appels = 0, complet = true, total = 0;
+  const balayer = async base => { for(let off = 0; off < 10000; off += 200){ if(Date.now() - t0 > limiteMs){ complet = false; return; }
+    const j = await ebayApi(`item_summary/search?${base}&filter=${f}&limit=200&offset=${off}`); appels++; const L = (j && j.itemSummaries) || [];
+    if(base.startsWith('category')) total = (j && j.total) || total;
+    L.forEach(x => { const p = x.price || {}; if(p.currency === 'EUR' && +p.value > 0 && x.itemWebUrl) vus.set(x.itemId, { t: String(x.title || '').slice(0, 220), prix: +p.value, url: x.itemWebUrl.split('?')[0], api: 1 }); });
+    if(L.length < 200 || !j.next) return; } };
+  for(const q of [...new Set(mots.map(m => String(m).toLowerCase().replace(/\b(or|argent|1 ?oz)\b/g, ' ').replace(/\s+/g, ' ').trim()).filter(m => m.length > 2))]) await balayer('q=' + encodeURIComponent(q));
   await balayer('category_ids=11116');
-  for(const q of [...new Set(['gold', 'or', 'silber', 'argent', 'silver', 'münze', ...mots.map(m => String(m).toLowerCase().replace(/\b(or|argent|1 ?oz)\b/g, '').trim()).filter(m => m.length > 2)])]) await balayer('q=' + encodeURIComponent(q));
-  return { produits: [...vus.values()], appels }; }
+  return { produits: [...vus.values()], appels, complet, total }; }
 // 21/11 : état de la clé, pour le journal du robot (jamais la clé elle-même)
 export async function ebayTester(){ if(!(process.env.EBAY_CLE || '').trim()) return 'absente (boutiques eBay lues en partie)'; if(!ebayActif()) return 'mal écrite (attendu « App ID:Cert ID », sans espace)';
   try{ await ebayJeton(); const j = await ebayApi('item_summary/search?q=gold&limit=1'); return j ? `acceptée ✅ (API joignable, ${j.total || 0} annonces « gold » sur eBay France)` : 'acceptée, mais recherche vide'; }catch(e){ return 'refusée : ' + String(e.message || e).slice(0, 80); } }
@@ -206,8 +211,8 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
       const eb = S.url.match(/ebay\.[a-z.]+\/str\/([^/?#]+)/i);
       let apiFait = false, apiErr = null;
       if(eb && ebayActif()){ try{
-        const R = await ebayVendeur(decodeURIComponent(eb[1]), conf.mots || []); R.produits.forEach(p => produits.push(p));
-        cov = { mode: 'api', complet: true, annonces: R.produits.length }; apiFait = true;
+        const R = await ebayVendeur(decodeURIComponent(eb[1]), conf.motsEbay || conf.mots || []); R.produits.forEach(p => produits.push(p));
+        cov = { mode: 'api', complet: R.complet, annonces: R.produits.length, total: R.total }; apiFait = true;
         if(!R.produits.length) err = 'aucune annonce « Achat immédiat » trouvée pour ce vendeur (nom du vendeur différent de celui de la boutique ?)';
       }catch(e){ apiErr = String(e.message || e).slice(0, 60); } }
       if(eb && !apiFait){
