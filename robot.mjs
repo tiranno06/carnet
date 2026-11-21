@@ -6,7 +6,7 @@ import http from 'node:http';
 import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
-import { relevePieces, releveSitesUtilisateur, verifierLivraison, releveFraisComparateur, verifierOffres, cleSite, ebayActif, ebayTester } from './pieces.mjs';
+import { relevePieces, releveSitesUtilisateur, verifierLivraison, releveFraisComparateur, verifierOffres, cleSite, ebayActif, ebayTester, ebayMarche } from './pieces.mjs';
 import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux, releveImmo } from './donnees-plus.mjs';
 
 const t0 = Date.now();
@@ -16,7 +16,7 @@ if(!existsSync('app.enc')){ say("aucune application publiée pour l'instant : ri
 if(!MDP){ say('secret MOT_DE_PASSE pas encore configuré : rien à faire'); process.exit(0); }
 
 // mêmes familles de données que la page reprend (jamais de clé, jamais de donnée personnelle)
-const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|immo_stats|pieces_prix|pieces_hist|or_plus|inities|wl_inities|wl_projournal|wl_bpa|scan|secours)/;
+const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|immo_stats|pieces_prix|pieces_hist|pieces_ebay|or_plus|inities|wl_inities|wl_projournal|wl_bpa|scan|secours)/;
 // 16/10 : les compteurs de quotas des services gratuits sont gardés d'un passage à l'autre (le robot passe bien plus souvent)
 
 const key = await cle(MDP, JSON.parse(readFileSync('sel.json', 'utf8')));
@@ -31,7 +31,7 @@ let prev = null;
 // 17/10 : un état présent mais illisible arrête le robot (avant, il repartait de zéro et écrasait tout l'historique)
 if(existsSync('site/data.enc')){ try{ prev = JSON.parse(await dechiffre(key, readFileSync('site/data.enc', 'utf8'))); }catch(e){ say('état précédent illisible : passage arrêté pour ne rien effacer'); process.exit(1); } }
 // tes données personnelles (stock de métaux…) : lues seulement pour calculer la valeur du jour, jamais recopiées en clair
-const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule|temp_exclus|temp_util|pieces_choix|pieces_sites|pieces_cibles|pieces_perso|fisc_dates|pro_dessins|repl_demande)/; // 16/10 : + ta règle pour les actions, tes choix d'indicateurs comptés dans les températures
+const PERSO = /^mt_(metals_(or|argent|cuivre)|metal_objectif_|dca_plan|fonds_euros|watchlist|trad_rule|temp_exclus|temp_util|pieces_choix|pieces_sites|pieces_cibles|pieces_perso|ebay_reglages|ebay_lien_demande|fisc_dates|pro_dessins|repl_demande)/; // 16/10 : + ta règle pour les actions, tes choix d'indicateurs comptés dans les températures
 let perso = {};
 if(existsSync('coffre.enc')){ try{ perso = JSON.parse(await dechiffre(key, readFileSync('coffre.enc', 'utf8'))).data || {}; }catch(e){ say('coffre illisible : passage arrêté'); process.exit(1); } }
 let subs = [];
@@ -319,8 +319,17 @@ try{
   // 24/10 : sources de secours (Stooq, Tiingo, relais) testées chaque semaine, chaque jour si l'une était en échec
   try{ const S = await page.evaluate(async () => { try{ if(!secoursDu()) return { fait: false, R: secoursResume() }; await Promise.race([secoursTester(), new Promise(r => setTimeout(r, 90000))]); return { fait: true, R: secoursResume() }; }catch(e){ return null; } });
     if(S && S.R){ jour.secours = S.R.alerte; if(S.fait) say(`sources de secours : ${S.R.ok}/${S.R.n} répondent`); } }catch(e){}
-  // 17/10 : pièces dont la prime est anormalement basse (d'après l'historique des relevés précédents)
-  try{ jour.affaires = await page.evaluate(() => { try{ return piecesAffaires(); }catch(e){ return null; } }); }catch(e){}
+  // 21/11 : section « Offres eBay » (API officielle d'eBay) : recherche sur tout eBay toutes les 6 h, meilleures offres relues à chaque passage,
+  // liens collés dans l'appli lus ; jamais un nom de vendeur ou de pièce dans ce journal (public)
+  try{ if(ebayActif()){ const t0e = Date.now(), conf = await page.evaluate(() => { try{ return ebayConfRobot(); }catch(e){ return null; } });
+      if(conf){ const avantE = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_ebay') || 'null'); }catch(e){ return null; } }) || {};
+        conf.force = +perso.mt_pieces_forcer > (avantE.brutAt || 0); // bouton « Relever les prix maintenant » / « Chercher maintenant »
+        const RE = await ebayMarche(conf, avantE); const n = await page.evaluate(R => { try{ return ebayEnregistrer(R); }catch(e){ return 'erreur ' + String(e.message).slice(0, 60); } }, RE);
+        say(`offres eBay : ${RE.brut ? RE.brut.length + ' annonce(s) lue(s) (' + RE.finies + '/' + RE.taches + ' recherches), ' : ''}${Object.keys(RE.verif || {}).length} relue(s), ${RE.appels} demande(s) en ${Math.round((Date.now() - t0e)/1000)} s${RE.etat.ok ? '' : ' — ' + RE.etat.msg}${typeof n === 'string' ? ' — ' + n : ''}`); } }
+    else await page.evaluate(() => { try{ ebayEnregistrer({ etat: { at: Date.now(), ok: false, msg: 'clé absente' }, appels: 0 }); }catch(e){} }); }catch(e){ say('offres eBay : ' + String(e.message || e).slice(0, 80)); }
+  try{ jour.ebayCle = await page.evaluate(() => { try{ const e = ebayDonnees().etat; return e ? { ko: !e.ok && e.msg !== 'clé absente', msg: e.msg } : null; }catch(x){ return null; } }); }catch(e){}
+  // 17/10 : pièces dont la prime est anormalement basse (d'après l'historique des relevés précédents) ; 21/11 : + bonnes affaires sur eBay
+  try{ jour.affaires = await page.evaluate(() => { let A = []; try{ A = piecesAffaires() || []; }catch(e){} try{ A = A.concat(ebayAffaires() || []); }catch(e){} return A; }); }catch(e){}
   try{ jour.cibles = await page.evaluate(() => { try{ return piecesCiblesAtteintes(); }catch(e){ return null; } }); }catch(e){} // 23/10 : tes prix cibles par pièce
   try{ const t0 = Date.now(); jour.zonesOr = await page.evaluate(async () => { try{ return await zoAlertes(); }catch(e){ return null; } }); say(`zones d'or : ${jour.zonesOr ? jour.zonesOr.length + ' placement(s) dans une zone mensuelle' : 'calcul impossible'} (${Math.round((Date.now() - t0)/1000)} s)`); }catch(e){} // 19/11 : zones d'or mensuelles
   // 20/10 : analyse pro : feu de tendance des lignes suivies, tes lignes tracées franchies, retour dans un bloc d'ordres

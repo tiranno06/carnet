@@ -143,7 +143,7 @@ async function ebayJetonNeuf(){
     body: 'grant_type=client_credentials&scope=' + encodeURIComponent('https://api.ebay.com/oauth/api_scope'), signal: AbortSignal.timeout(20000) });
   if(!r.ok) throw new Error(`clé eBay refusée (${r.status})`); const j = await r.json(); EBAY_TOK = { t: j.access_token, fin: Date.now() + (j.expires_in || 7200)*1000 }; return EBAY_TOK.t; }
 async function ebayApi(chemin, mp = 'EBAY_FR'){ const t = await ebayJeton();
-  for(let essai = 0; essai < 3; essai++){ const r = await fetch('https://api.ebay.com/buy/browse/v1/' + chemin, { headers: { authorization: 'Bearer ' + t, 'X-EBAY-C-MARKETPLACE-ID': mp, 'accept-language': 'fr-FR' }, signal: AbortSignal.timeout(25000) });
+  for(let essai = 0; essai < 3; essai++){ const r = await fetch('https://api.ebay.com/buy/browse/v1/' + chemin, { headers: { authorization: 'Bearer ' + t, 'X-EBAY-C-MARKETPLACE-ID': mp, 'X-EBAY-C-ENDUSERCTX': 'contextualLocation=country%3DFR%2Czip%3D75001', 'accept-language': 'fr-FR' }, signal: AbortSignal.timeout(25000) });
     if(r.status === 404) return null; if(r.ok) return r.json(); if(r.status !== 429 && r.status < 500) throw new Error('API eBay ' + r.status); await new Promise(z => setTimeout(z, 3000*(essai + 1))); }
   throw new Error('API eBay indisponible'); }
 // toutes les annonces « Achat immédiat » en euros d'un vendeur : catégorie Monnaies entière, puis or / argent / chaque pièce suivie (une annonce
@@ -164,7 +164,7 @@ export async function ebayVendeur(vendeur, mots = [], limiteMs = 75000, mp = 'EB
   const balayer = async base => { for(let off = 0; off < 10000; off += 200){ if(Date.now() - t0 > limiteMs){ complet = false; return; }
     const j = await ebayApi(`item_summary/search?${base}&filter=${f}&limit=200&offset=${off}`, mp); appels++; const L = (j && j.itemSummaries) || [];
     if(base.startsWith('category')) total = (j && j.total) || total;
-    L.forEach(x => { const p = x.price || {}; if(String((x.seller || {}).username || '').toLowerCase() !== vendeur.toLowerCase()) { autres++; return; } if(p.currency === 'EUR' && +p.value > 0 && x.itemWebUrl) vus.set(x.itemId, { t: String(x.title || '').slice(0, 220), prix: +p.value, url: x.itemWebUrl.split('?')[0], api: 1 }); });
+    L.forEach(x => { const p = x.price || {}; if(String((x.seller || {}).username || '').toLowerCase() !== vendeur.toLowerCase()) { autres++; return; } if(p.currency === 'EUR' && +p.value > 0 && x.itemWebUrl) { const o = ebayResume(x, mp); vus.set(x.itemId, { t: String(x.title || '').slice(0, 220), prix: +p.value, url: x.itemWebUrl.split('?')[0], api: 1, port: o ? o.port : null, v: String((x.seller || {}).username || '').toLowerCase() }); } });
     if(L.length < 200 || !j.next) return; } };
   for(const q of [...new Set(mots.map(m => String(m).toLowerCase().replace(/\b(or|argent|1 ?oz)\b/g, ' ').replace(/\s+/g, ' ').trim()).filter(m => m.length > 2))]) await balayer('q=' + encodeURIComponent(q));
   await balayer('category_ids=11116');
@@ -183,6 +183,45 @@ async function ebayFiche(url){ const id = (String(url).match(/\/itm\/(?:[^/]+\/)
   const j = await ebayApi('item/get_item_by_legacy_id?legacy_item_id=' + id); if(!j) return { lu: null, dispo: false };
   const st = ((j.estimatedAvailabilities || [])[0] || {}).estimatedAvailabilityStatus || '', fin = j.itemEndDate && Date.parse(j.itemEndDate) < Date.now();
   return { lu: j.price && j.price.currency === 'EUR' ? +j.price.value : null, dispo: !fin && !/OUT_OF_STOCK/i.test(st) && (j.buyingOptions || []).includes('FIXED_PRICE') }; }
+// ==== 21/11 (demande du propriétaire : section « Offres eBay ») : chaque pièce suivie cherchée sur TOUT eBay (France et eBay voisins),
+// annonces livrables en France, envoyées depuis l'Union européenne, avec frais de port vers la France, réputation du vendeur, enchères à part.
+// La reconnaissance des pièces, les filtres de confiance et les calculs sont faits ensuite par l'appli (ebayEnregistrer, 11g).
+const EBAY_UE = new Set('AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE'.split(' '));
+const EBAY_VOISINS = ['EBAY_FR', 'EBAY_DE', 'EBAY_BE', 'EBAY_IT', 'EBAY_NL', 'EBAY_AT', 'EBAY_ES'];
+// une annonce de l'API, réduite à ce qui sert (prix et port en euros, vendeur, pays, enchère et date de fin)
+export function ebayResume(x, mp){ if(!x) return null; const B = x.buyingOptions || [], p = x.price || {}, cb = x.currentBidPrice || {}, so = (x.shippingOptions || [])[0] || {}, sc = so.shippingCost || {}, s = x.seller || {};
+  const ench = B.includes('AUCTION') && !B.includes('FIXED_PRICE'), prix = +((ench ? cb.value : null) || p.value), cur = (ench ? cb.currency : null) || p.currency;
+  if(cur !== 'EUR' || !(prix > 0) || !x.itemWebUrl) return null;
+  return { t: String(x.title || '').slice(0, 200), prix, port: sc.currency === 'EUR' && sc.value != null ? +sc.value : null, url: x.itemWebUrl.split('?')[0], v: String(s.username || ''),
+    fb: s.feedbackPercentage != null ? +s.feedbackPercentage : null, n: s.feedbackScore != null ? +s.feedbackScore : null, pays: String((x.itemLocation || {}).country || ''), mp, ench: ench ? 1 : 0,
+    fin: ench ? (x.itemEndDate || null) : null, img: ((x.image || {}).imageUrl) || null }; }
+// fiche complète d'une annonce (lien collé par le propriétaire, contrôle de disponibilité)
+export async function ebayFicheComplete(url){ const id = (String(url).match(/\/itm\/(?:[^/]+\/)?(\d{9,15})/) || [])[1]; if(!id) return { err: "ce n'est pas le lien d'une annonce eBay (…/itm/…)" };
+  const j = await ebayApi('item/get_item_by_legacy_id?legacy_item_id=' + id); if(!j) return { err: 'annonce introuvable ou terminée', dispo: false };
+  const st = ((j.estimatedAvailabilities || [])[0] || {}).estimatedAvailabilityStatus || '', fini = j.itemEndDate && Date.parse(j.itemEndDate) < Date.now() && !(j.buyingOptions || []).includes('FIXED_PRICE');
+  const r = ebayResume(j, 'EBAY_FR'); return { r, dispo: !fini && !/OUT_OF_STOCK/i.test(st), lu: r ? r.prix : null, err: r ? null : 'prix pas en euros' }; }
+// conf (donnée par l'appli, ebayConfRobot) : { sig, pieces: [{ id, q: [mots…], min, max }], verifier: [adresses], liens: [adresses], force }
+export async function ebayMarche(conf, avant = {}, budgetMs = 110000){
+  const t0 = Date.now(), R = { etat: { at: Date.now(), ok: true, msg: '' }, appels: 0 };
+  try{ await ebayJeton(); }catch(e){ R.etat = { at: Date.now(), ok: false, msg: String(e.message || e).slice(0, 80) }; return R; }
+  const plein = conf.force || !avant || !avant.brutAt || Date.now() - avant.brutAt > 6*3600000 || avant.sig !== conf.sig;
+  if(plein && (conf.pieces || []).length){
+    const taches = []; conf.pieces.forEach(p => (p.q || []).slice(0, 2).forEach(q => EBAY_VOISINS.forEach(mp => taches.push([p, q, mp]))));
+    const brut = new Map(); let i = 0, finies = 0, err = 0;
+    const ouvrier = async () => { while(i < taches.length && Date.now() - t0 < budgetMs*0.7){ const [P, q, mp] = taches[i++];
+      const prixF = P.min > 0 ? `,price:%5B${Math.floor(P.min)}..${Math.ceil(P.max || P.min*3)}%5D,priceCurrency:EUR` : '';
+      try{ const j = await ebayApi(`item_summary/search?q=${encodeURIComponent(q)}&filter=buyingOptions:%7BFIXED_PRICE%7CAUCTION%7D,deliveryCountry:FR${prixF}&sort=price&limit=100`, mp); R.appels++;
+        ((j && j.itemSummaries) || []).forEach(x => { const o = ebayResume(x, mp); if(o && EBAY_UE.has(o.pays)) brut.set(x.itemId || o.url, o); }); finies++; }catch(e){ err++; } } };
+    await Promise.all(Array.from({ length: 6 }, ouvrier));
+    R.brut = [...brut.values()]; R.complet = finies === taches.length; R.taches = taches.length; R.finies = finies; R.erreurs = err;
+    if(!finies && err){ R.etat = { at: Date.now(), ok: false, msg: 'recherches eBay en échec' }; } }
+  // disponibilité et prix des meilleures offres, relus à chaque passage (au plus 40, 25 s)
+  R.verif = {}; const V = (conf.verifier || []).slice(0, 40); let k = 0;
+  const ver = async () => { while(k < V.length && Date.now() - t0 < budgetMs*0.85){ const u = V[k++]; try{ const F = await ebayFicheComplete(u); R.appels++; R.verif[u] = { at: Date.now(), dispo: !!F.dispo, lu: F.lu, port: F.r ? F.r.port : null }; }catch(e){} } };
+  await Promise.all(Array.from({ length: 4 }, ver));
+  // liens d'annonces collés dans l'appli
+  R.liens = {}; for(const u of (conf.liens || []).slice(0, 5)){ if(Date.now() - t0 > budgetMs) break; try{ const F = await ebayFicheComplete(u); R.appels++; R.liens[u] = { at: Date.now(), ...F }; }catch(e){ R.liens[u] = { at: Date.now(), err: String(e.message || e).slice(0, 60) }; } }
+  return R; }
 const PROTEGE = /just a moment|un instant|attention required|access denied|acc[eè]s refus|verifying|v[ée]rification de s[ée]curit[ée]|captcha|are you a robot|pardon our interruption|mesure de s[ée]curit[ée]|security measure/i;
 async function lirePage(ctx, url){
   const p = await ctx.newPage();
