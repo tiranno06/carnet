@@ -162,7 +162,7 @@ try{
     // 18/11 (relevé le plus rapide possible) : les 6 sites les plus anciennement lus (plus de 2 h), lus en même temps (environ 1 min 30)
     // 20/11 : clé de l'API d'eBay présente : une boutique eBay pas encore lue par l'API (donc lue en partie) est relue tout de suite
     if(!complet && conf && ebayActif()){ const deja = new Set(aRefaire.map(hoteDe)); conf.sites.filter(x => /ebay\.[a-z.]+\/str\//i.test(x.url) && !deja.has(hoteDe(x)) && (() => { const r = (avant.sites || {})[hoteDe(x)] || {}; return !(r.cov || {}).mp || (r.offres || []).some(o => !o.v); })()).forEach(x => aRefaire.push(x)); }
-    if(!complet && conf){ const deja = new Set(aRefaire.map(hoteDe)); const vieux = conf.sites.filter(x => !deja.has(hoteDe(x))).map(x => [x, ((avant.sites || {})[hoteDe(x)] || {}).at || 0]).filter(([, t]) => Date.now() - t > 2*3600000).sort((a, b) => a[1] - b[1]); vieux.slice(0, Math.max(0, 6 - aRefaire.length)).forEach(([x]) => aRefaire.push(x)); }
+    if(!complet && conf){ const deja = new Set(aRefaire.map(hoteDe)); const vieux = conf.sites.filter(x => !deja.has(hoteDe(x))).map(x => [x, ((avant.sites || {})[hoteDe(x)] || {}).at || 0]).filter(([, t]) => Date.now() - t > 3600000).sort((a, b) => a[1] - b[1]); vieux.slice(0, Math.max(0, 10 - aRefaire.length)).forEach(([x]) => aRefaire.push(x)); } // 21/11 : 10 sites de plus d'1 h par passage (avant 6 de plus de 2 h)
     if(aRefaire.length){
       const P = avant; P.sites = P.sites || {}; let nS = 0;
       const R = await releveSitesUtilisateur(page.context(), { ...conf, sites: aRefaire }, P.sites, 100000, 6);
@@ -325,7 +325,7 @@ try{
       if(conf){ const avantE = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_ebay') || 'null'); }catch(e){ return null; } }) || {};
         conf.force = +perso.mt_pieces_forcer > (avantE.brutAt || 0); // bouton « Relever les prix maintenant » / « Chercher maintenant »
         const RE = await ebayMarche(conf, avantE); const n = await page.evaluate(R => { try{ return ebayEnregistrer(R); }catch(e){ return 'erreur ' + String(e.message).slice(0, 60); } }, RE);
-        say(`offres eBay : ${RE.brut ? RE.brut.length + ' annonce(s) lue(s) (' + RE.finies + '/' + RE.taches + ' recherches), ' : ''}${Object.keys(RE.verif || {}).length} relue(s), ${RE.appels} demande(s) en ${Math.round((Date.now() - t0e)/1000)} s${RE.etat.ok ? '' : ' — ' + RE.etat.msg}${typeof n === 'string' ? ' — ' + n : ''}`); } }
+        say(`offres eBay : ${RE.brut ? RE.brut.length + ' annonce(s) lue(s) (' + RE.finies + '/' + RE.taches + ' recherches), ' : ''}${RE.nouveaux ? RE.nouveaux.length + ' annonce(s) récente(s) (' + RE.balaye + ' recherches), ' : ''}${Object.keys(RE.verif || {}).length} relue(s), ${RE.appels} demande(s) en ${Math.round((Date.now() - t0e)/1000)} s${RE.etat.ok ? '' : ' — ' + RE.etat.msg}${typeof n === 'string' ? ' — ' + n : ''}`); } }
     else await page.evaluate(() => { try{ ebayEnregistrer({ etat: { at: Date.now(), ok: false, msg: 'clé absente' }, appels: 0 }); }catch(e){} }); }catch(e){ say('offres eBay : ' + String(e.message || e).slice(0, 80)); }
   try{ jour.ebayCle = await page.evaluate(() => { try{ const e = ebayDonnees().etat; return e ? { ko: !e.ok && e.msg !== 'clé absente', msg: e.msg } : null; }catch(x){ return null; } }); }catch(e){}
   // 17/10 : pièces dont la prime est anormalement basse (d'après l'historique des relevés précédents) ; 21/11 : + bonnes affaires sur eBay

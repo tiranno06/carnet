@@ -207,6 +207,19 @@ export async function ebayMarche(conf, avant = {}, budgetMs = 110000){
   const t0 = Date.now(), R = { etat: { at: Date.now(), ok: true, msg: '' }, appels: 0 };
   try{ await ebayJeton(); }catch(e){ R.etat = { at: Date.now(), ok: false, msg: String(e.message || e).slice(0, 80) }; return R; }
   const plein = conf.force || !avant || !avant.brutAt || Date.now() - avant.brutAt > 6*3600000 || avant.sig !== conf.sig;
+  // 21/11 (demande du propriétaire : voir les nouvelles annonces au plus vite) : entre deux recherches complètes, à CHAQUE passage, une partie
+  // des recherches « annonces les plus récentes » (tour à tour : chaque pièce sur chaque eBay environ toutes les heures), dans la limite des
+  // 5 000 demandes par jour autorisées par eBay (au-delà de 3 800 demandes dans la journée, ce balayage s'arrête jusqu'au lendemain)
+  if(!plein && (conf.pieces || []).length && (conf.appelsJour || 0) < 3800){
+    const taches = []; conf.pieces.forEach(p => EBAY_VOISINS.forEach(mp => taches.push([p, (p.q || [])[0], mp])));
+    const n = Math.min(30, taches.length), dep = (avant.rot || 0) % taches.length, choix = Array.from({ length: n }, (_, i) => taches[(dep + i) % taches.length]); R.rot = (dep + n) % taches.length;
+    const neuf = new Map(); let i = 0;
+    const ouvrier = async () => { while(i < choix.length && Date.now() - t0 < budgetMs*0.5){ const [P, q, mp] = choix[i++]; if(!q) continue;
+      const prixF = P.min > 0 ? `,price:%5B${Math.floor(P.min)}..${Math.ceil(P.max || P.min*3)}%5D,priceCurrency:EUR` : '';
+      try{ const j = await ebayApi(`item_summary/search?q=${encodeURIComponent(q)}&filter=buyingOptions:%7BFIXED_PRICE%7CAUCTION%7D,deliveryCountry:FR${prixF}&sort=newlyListed&limit=50`, mp); R.appels++;
+        ((j && j.itemSummaries) || []).forEach(x => { const o = ebayResume(x, mp); if(o && EBAY_UE.has(o.pays)) neuf.set(x.itemId || o.url, o); }); }catch(e){} } };
+    await Promise.all(Array.from({ length: 6 }, ouvrier));
+    R.nouveaux = [...neuf.values()]; R.balaye = n; }
   if(plein && (conf.pieces || []).length){
     const taches = []; conf.pieces.forEach(p => (p.q || []).slice(0, 2).forEach(q => EBAY_VOISINS.forEach(mp => taches.push([p, q, mp]))));
     const brut = new Map(); let i = 0, finies = 0, err = 0;
@@ -218,7 +231,7 @@ export async function ebayMarche(conf, avant = {}, budgetMs = 110000){
     R.brut = [...brut.values()]; R.complet = finies === taches.length; R.taches = taches.length; R.finies = finies; R.erreurs = err;
     if(!finies && err){ R.etat = { at: Date.now(), ok: false, msg: 'recherches eBay en échec' }; } }
   // disponibilité et prix des meilleures offres, relus à chaque passage (au plus 40, 25 s)
-  R.verif = {}; const V = (conf.verifier || []).slice(0, 40); let k = 0;
+  R.verif = {}; const V = (conf.verifier || []).slice(0, (conf.appelsJour || 0) > 4300 ? 5 : 40); let k = 0;
   const ver = async () => { while(k < V.length && Date.now() - t0 < budgetMs*0.85){ const u = V[k++]; try{ const F = await ebayFicheComplete(u); R.appels++; R.verif[u] = { at: Date.now(), dispo: !!F.dispo, lu: F.lu, port: F.r ? F.r.port : null }; }catch(e){} } };
   await Promise.all(Array.from({ length: 4 }, ver));
   // liens d'annonces collés dans l'appli
