@@ -6,7 +6,7 @@ import http from 'node:http';
 import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
-import { relevePieces, releveSitesUtilisateur, verifierLivraison, releveFraisComparateur, verifierOffres, cleSite } from './pieces.mjs';
+import { relevePieces, releveSitesUtilisateur, verifierLivraison, releveFraisComparateur, verifierOffres, cleSite, ebayActif, ebayTester } from './pieces.mjs';
 import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux, releveImmo } from './donnees-plus.mjs';
 
 const t0 = Date.now();
@@ -140,6 +140,8 @@ try{
   say('actualisation principale terminée'); const dureeAct = Math.round((Date.now() - t0)/1000); // 24/10 : temps de chaque étape, pour repérer un robot qui ralentit
   // 24/10 : les relevés hors de la page (pièces, or des banques centrales et des ETF, dirigeants, données en plus) tournent
   // pendant la visite des onglets et le calcul des prévisions, au lieu d'attendre la fin ; l'état n'est enregistré qu'une fois finis.
+  // 21/11 : contrôle de la clé de l'API d'eBay (secret EBAY_CLE) : seulement « acceptée » ou la raison du refus, jamais la clé
+  try{ say('clé eBay : ' + await ebayTester()); }catch(e){}
   const releves = (async () => {
   // 17/10 : prix des pièces d'or chez les marchands (toutes les 6 h), repris par la page (Mes Métaux)
   try{
@@ -156,6 +158,8 @@ try{
     // 17/11 : beaucoup de sites (36 boutiques suivies par un comparateur ajoutées) : à chaque passage, en plus, le site le plus anciennement lu
     // s'il a plus de 8 h (une minute environ) ; ainsi chaque site est relu environ deux fois par jour sans allonger beaucoup le passage
     // 18/11 (relevé le plus rapide possible) : les 6 sites les plus anciennement lus (plus de 2 h), lus en même temps (environ 1 min 30)
+    // 20/11 : clé de l'API d'eBay présente : une boutique eBay pas encore lue par l'API (donc lue en partie) est relue tout de suite
+    if(!complet && conf && ebayActif()){ const deja = new Set(aRefaire.map(hoteDe)); conf.sites.filter(x => /ebay\.[a-z.]+\/str\//i.test(x.url) && !deja.has(hoteDe(x)) && (((avant.sites || {})[hoteDe(x)] || {}).cov || {}).mode !== 'api').forEach(x => aRefaire.push(x)); }
     if(!complet && conf){ const deja = new Set(aRefaire.map(hoteDe)); const vieux = conf.sites.filter(x => !deja.has(hoteDe(x))).map(x => [x, ((avant.sites || {})[hoteDe(x)] || {}).at || 0]).filter(([, t]) => Date.now() - t > 2*3600000).sort((a, b) => a[1] - b[1]); vieux.slice(0, Math.max(0, 6 - aRefaire.length)).forEach(([x]) => aRefaire.push(x)); }
     if(aRefaire.length){
       const P = avant; P.sites = P.sites || {}; let nS = 0;

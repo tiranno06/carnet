@@ -153,6 +153,9 @@ export async function ebayVendeur(vendeur, mots = []){
   await balayer('category_ids=11116');
   for(const q of [...new Set(['gold', 'or', 'silber', 'argent', 'silver', 'münze', ...mots.map(m => String(m).toLowerCase().replace(/\b(or|argent|1 ?oz)\b/g, '').trim()).filter(m => m.length > 2)])]) await balayer('q=' + encodeURIComponent(q));
   return { produits: [...vus.values()], appels }; }
+// 21/11 : état de la clé, pour le journal du robot (jamais la clé elle-même)
+export async function ebayTester(){ if(!(process.env.EBAY_CLE || '').trim()) return 'absente (boutiques eBay lues en partie)'; if(!ebayActif()) return 'mal écrite (attendu « App ID:Cert ID », sans espace)';
+  try{ await ebayJeton(); const j = await ebayApi('item_summary/search?q=gold&limit=1'); return j ? `acceptée ✅ (API joignable, ${j.total || 0} annonces « gold » sur eBay France)` : 'acceptée, mais recherche vide'; }catch(e){ return 'refusée : ' + String(e.message || e).slice(0, 80); } }
 // fiche d'une annonce eBay par l'API (prix et disponibilité), pour le triple contrôle
 async function ebayFiche(url){ const id = (String(url).match(/\/itm\/(?:[^/]+\/)?(\d{9,15})/) || [])[1]; if(!id) return null;
   const j = await ebayApi('item/get_item_by_legacy_id?legacy_item_id=' + id); if(!j) return { lu: null, dispo: false };
