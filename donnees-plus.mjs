@@ -461,16 +461,39 @@ export async function releveAmpleur(){
     return [d, n ? Math.round(a / n * 1000) / 10 : null, n]; }).filter(x => x[1] != null && x[2] >= 60);
   return { at: Date.now(), hist, n: ok.length };
 }
-// 2. liquidités des gérants (enquête mensuelle de Bank of America, pas publiée librement) : le chiffre cité dans les titres de presse des
-// 45 derniers jours (GDELT, base publique d'articles faite pour la lecture automatique) ; rien d'inventé : pas de chiffre trouvé = inconnu
+// 2. liquidités des gérants (enquête mensuelle « Global Fund Manager Survey » de Bank of America, pas publiée librement par la banque).
+// 22/11 (demande du propriétaire : trouvé par le robot, fiable) : plusieurs sources publiques qui se contrôlent :
+//   a. flux public d'Atrani Capital (Substack) : un article par enquête (« <Mois> <Année> Bank of America Global Fund Manager Survey ») ;
+//   b. GDELT (base publique d'articles faite pour la lecture automatique) : titres, puis texte des articles trouvés, seulement sur les sites
+//      qui autorisent les robots (robots.txt) ;
+// le chiffre retenu est celui de l'enquête la plus récente (moins de 45 jours) ; « confirmé » quand deux sources donnent la même valeur
+// (à 0,1 point près). Rien d'inventé : aucune source = inconnu.
+const BOFA_MOIS = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12 };
+const sansBalises = t => String(t || '').replace(/<!\[CDATA\[|\]\]>/g, '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ');
+function cashDans(t){ const x = sansBalises(t);
+  const m = x.match(/cash (?:holdings?|levels?|balances?|allocation|position)[^%.]{0,70}?(\d(?:[.,]\d)?)\s?%/i) || x.match(/(\d(?:[.,]\d)?)\s?%\s*(?:of (?:assets|aum)[^.]{0,30})?\s*(?:in )?cash/i);
+  if(!m) return null; const v = parseFloat(m[1].replace(',', '.')); return v >= 2 && v <= 8 ? v : null; }
+async function robotsPermis(url){ try{ const u = new URL(url), t = await lire(`${u.origin}/robots.txt`); let pourNous = false, vu = false; const D = [], A = [];
+    for(const l of t.split(/\r?\n/)){ const m = l.replace(/#.*/, '').trim().match(/^([a-z-]+)\s*:\s*(.*)$/i); if(!m) continue; const k = m[1].toLowerCase(), v = m[2].trim();
+      if(k === 'user-agent'){ if(vu){ pourNous = false; vu = false; } if(v === '*') pourNous = true; continue; } vu = true; if(!pourNous) continue; if(k === 'disallow' && v) D.push(v); if(k === 'allow' && v) A.push(v); }
+    const p = u.pathname, lg = L => Math.max(-1, ...L.filter(x => p.startsWith(x.replace(/\*.*$/, ''))).map(x => x.length)); return lg(A) >= lg(D); }catch(e){ return true; } } // pas de robots.txt = permis
 export async function releveBofa(){
-  const q = encodeURIComponent('"fund manager survey" cash');
-  // GDELT n'accepte qu'une demande toutes les 5 secondes (le robot l'interroge aussi ailleurs) : jusqu'à 3 essais espacés de 7 s
+  const sources = [], limite = Date.now() - 45*86400000;
+  // a. Atrani Capital
+  try{ const t = await lire('https://atranicapital.substack.com/feed');
+    for(const it of t.split('<item>').slice(1)){ const ti = sansBalises((it.match(/<title>([\s\S]*?)<\/title>/) || [])[1]), d = Date.parse((it.match(/<pubDate>([^<]+)</) || [])[1] || '');
+      const mm = ti.match(/(january|february|march|april|may|june|july|august|september|october|november|december)\s+(20\d\d)\s+Bank of America Global Fund Manager Survey/i);
+      if(!mm || !(d > limite)) continue; const v = cashDans(it); if(v != null){ sources.push({ nom: 'Atrani Capital', val: v, mois: `${mm[2]}-${String(BOFA_MOIS[mm[1].toLowerCase()]).padStart(2, '0')}`, date: new Date(d).toISOString().slice(0, 10) }); break; } } }catch(e){}
+  // b. GDELT : titres puis texte des articles (sites qui autorisent les robots), 3 essais espacés de 7 s (une demande toutes les 5 s)
   let A = null, der = '';
   for(let essai = 0; essai < 3 && !A; essai++){ if(essai) await new Promise(r => setTimeout(r, 7000));
-    try{ der = await lire(`https://api.gdeltproject.org/api/v2/doc/doc?query=${q}&mode=artlist&maxrecords=100&timespan=45d&format=json&sort=datedesc`); A = (JSON.parse(der).articles || []); }catch(e){ der = der || String(e.message || e); } }
-  if(!A) throw new Error('GDELT : ' + String(der).replace(/\s+/g, ' ').slice(0, 70));
-  for(const a of A){ const t = String(a.title || ''); const m = t.match(/cash[^%\d]{0,45}(\d(?:[.,]\d)?)\s?%/i) || t.match(/(\d(?:[.,]\d)?)\s?%\s*(?:in\s+|of\s+)?cash/i);
-    if(m){ const v = parseFloat(m[1].replace(',', '.')); if(v >= 2 && v <= 8) return { at: Date.now(), cash: v, titre: t.slice(0, 160), source: String(a.domain || ''), date: String(a.seendate || '').slice(0, 8) }; } }
-  return { at: Date.now(), cash: null, lus: A.length };
+    try{ der = await lire(`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent('"fund manager survey" cash')}&mode=artlist&maxrecords=60&timespan=40d&format=json&sort=datedesc`); A = (JSON.parse(der).articles || []); }catch(e){ der = der || String(e.message || e); } }
+  if(A){ const vus = new Set();
+    for(const a of A){ const v = cashDans(a.title); if(v != null && !vus.has(a.domain)){ vus.add(a.domain); sources.push({ nom: String(a.domain || '').slice(0, 40), val: v, date: String(a.seendate || '').slice(0, 8) }); } }
+    for(const a of A.filter(a => /fund manager survey/i.test(a.title || '') && !vus.has(a.domain)).slice(0, 6)){ try{ if(!(await robotsPermis(a.url))) continue; const v = cashDans(await lire(a.url)); if(v != null){ vus.add(a.domain); sources.push({ nom: String(a.domain || '').slice(0, 40), val: v, date: String(a.seendate || '').slice(0, 8) }); } }catch(e){} } }
+  if(!sources.length) return { at: Date.now(), cash: null, sources: [], err: A ? null : 'GDELT : ' + String(der).replace(/\s+/g, ' ').slice(0, 60) };
+  // valeur retenue : la plus citée (à 0,1 point près), Atrani Capital en priorité en cas d'égalité
+  const groupes = sources.map(s => ({ v: s.val, n: sources.filter(x => Math.abs(x.val - s.val) <= 0.1).length, a: s.nom === 'Atrani Capital' ? 1 : 0 })).sort((x, y) => y.n - x.n || y.a - x.a);
+  const g = groupes[0], principal = sources.find(s => s.nom === 'Atrani Capital');
+  return { at: Date.now(), cash: g.v, confirme: g.n >= 2, mois: principal ? principal.mois : null, source: sources.filter(s => Math.abs(s.val - g.v) <= 0.1).map(s => s.nom).join(', '), sources: sources.slice(0, 8), date: (principal || sources[0]).date || '' };
 }

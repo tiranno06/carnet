@@ -221,7 +221,7 @@ try{
     { const C = { ...(O.creux || {}) };
       if(!C.ampleur || Date.now() - (C.ampleur.at || 0) > 20*3600000){ try{ C.ampleur = await releveAmpleur(); neuf = true; }catch(e){ say('reprise générale des actions : ' + String(e.message).slice(0, 70)); } }
       const b0 = C.bofa, dernier = b0 ? (b0.essai || b0.at || 0) : 0;
-      if(!b0 || Date.now() - dernier > (b0.cash == null || b0.err ? 6 : 20)*3600000){
+      if(!b0 || !b0.sources || Date.now() - dernier > (b0.cash == null || b0.err ? 6 : 20)*3600000){ // !sources : ancien format, relu tout de suite
         try{ const b = await releveBofa(); if(b.cash != null || !b0 || b0.cash == null || Date.now() - (b0.at || 0) > 40*86400000) C.bofa = b; else C.bofa = { ...b0, essai: Date.now(), err: null }; }
         catch(e){ C.bofa = { ...(b0 || { cash: null }), essai: Date.now(), err: String(e.message || e).slice(0, 80) }; say('liquidités des gérants (presse) : ' + String(e.message).slice(0, 70)); }
         neuf = true; }
