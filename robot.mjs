@@ -155,19 +155,19 @@ try{
     // sites personnels en échec (hors sites qui bloquent les robots) : nouvel essai au bout d'1 h, sans tout relever
     const hoteDe = x => cleSite(x.url);
     // 21/11 : annonces eBay lues par l'API AVANT le contrôle du vendeur (des annonces d'autres vendeurs) : jamais gardées
-    const douteux = r => !!(r && r.cov && r.cov.mode === 'api' && !r.cov.pseudo); // 18/11 : chaque boutique eBay a sa propre case
+    const douteux = r => !!(r && r.cov && r.cov.mode === 'api' && (!r.cov.pseudo || !r.cov.mp || !r.cov.annonces)); // 18/11 : chaque boutique eBay a sa propre case
     const aRefaire = !complet && conf ? conf.sites.filter(x => { const r = (avant.sites || {})[hoteDe(x)]; return r && r.err && !/protégé|refuse les robots/.test(r.err) && Date.now() - (r.at || 0) > 3600000; }) : [];
     // 17/11 : beaucoup de sites (36 boutiques suivies par un comparateur ajoutées) : à chaque passage, en plus, le site le plus anciennement lu
     // s'il a plus de 8 h (une minute environ) ; ainsi chaque site est relu environ deux fois par jour sans allonger beaucoup le passage
     // 18/11 (relevé le plus rapide possible) : les 6 sites les plus anciennement lus (plus de 2 h), lus en même temps (environ 1 min 30)
     // 20/11 : clé de l'API d'eBay présente : une boutique eBay pas encore lue par l'API (donc lue en partie) est relue tout de suite
-    if(!complet && conf && ebayActif()){ const deja = new Set(aRefaire.map(hoteDe)); conf.sites.filter(x => /ebay\.[a-z.]+\/str\//i.test(x.url) && !deja.has(hoteDe(x)) && !(((avant.sites || {})[hoteDe(x)] || {}).cov || {}).pseudo).forEach(x => aRefaire.push(x)); }
+    if(!complet && conf && ebayActif()){ const deja = new Set(aRefaire.map(hoteDe)); conf.sites.filter(x => /ebay\.[a-z.]+\/str\//i.test(x.url) && !deja.has(hoteDe(x)) && !(((avant.sites || {})[hoteDe(x)] || {}).cov || {}).mp).forEach(x => aRefaire.push(x)); }
     if(!complet && conf){ const deja = new Set(aRefaire.map(hoteDe)); const vieux = conf.sites.filter(x => !deja.has(hoteDe(x))).map(x => [x, ((avant.sites || {})[hoteDe(x)] || {}).at || 0]).filter(([, t]) => Date.now() - t > 2*3600000).sort((a, b) => a[1] - b[1]); vieux.slice(0, Math.max(0, 6 - aRefaire.length)).forEach(([x]) => aRefaire.push(x)); }
     if(aRefaire.length){
       const P = avant; P.sites = P.sites || {}; let nS = 0;
       const R = await releveSitesUtilisateur(page.context(), { ...conf, sites: aRefaire }, P.sites, 100000, 6);
       for(const [h, r] of Object.entries(R)){ const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
-        P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, cov: r.cov || null, offres: offres.length ? offres : (douteux(P.sites[h]) ? [] : ((P.sites[h] || {}).offres || [])) }; nS++;
+        P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, cov: r.cov || null, offres: offres.length ? offres : (douteux(P.sites[h]) || (r.cov && r.cov.mode === 'api') ? [] : ((P.sites[h] || {}).offres || [])) }; nS++;
         say(`pièces — site personnel relu : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); }
       await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P));
     }
@@ -180,7 +180,7 @@ try{
         for(const [h, r] of Object.entries(R)){
           const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
           const ancien = P.sites[h] || {};
-          P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, cov: r.cov || null, offres: offres.length ? offres : (r.err && !douteux(ancien) ? (ancien.offres || []) : []) };
+          P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, cov: r.cov || null, offres: offres.length ? offres : (r.err && !douteux(ancien) && !(r.cov && r.cov.mode === 'api') ? (ancien.offres || []) : []) };
           nS++; say(`pièces — site personnel n°${nS} : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); // jamais le nom du site : le journal est public
         }
       }
