@@ -199,6 +199,11 @@ export function alertes(H, st, subs){
     msgs.bulletin.push('10/20 = pas mieux que la moyenne, 20/20 = parfait.\n' + lines.join('\n'));
   }
   // 24/10 : sources de secours en panne (testées chaque semaine par le robot) : prévenu quand la liste change, et quand tout revient
+  // 22/11 : cadres « creux du marché » de l'accueil : prévenu quand un cadre s'allume, de nouveau après 14 jours s'il reste allumé
+  msgs.creux = [];
+  if(st.creux){ A.creux = A.creux || {};
+    [['bourse', `Bourse : ${st.creux.nb} signaux de creux sur 5 allumés. Selon la leçon Bourse, le creux est probablement atteint.`], ['or', "Or : les 4 signaux de reprise sont allumés. Selon la leçon sur l'or, le creux de l'or est probablement passé."]].forEach(([k, t]) => {
+      if(st.creux[k]){ if(!A.creux[k] || Date.now() - A.creux[k] > 14*86400000){ A.creux[k] = Date.now(); msgs.creux.push(t); } } else delete A.creux[k]; }); }
   // 21/11 : clé de l'API d'eBay refusée (secret EBAY_CLE) : prévenu une fois, de nouveau après 3 jours si c'est toujours le cas
   msgs.ebayCle = [];
   if(st.ebayCle && st.ebayCle.ko){ if(!A.ebayCle || Date.now() - A.ebayCle > 3*86400000){ A.ebayCle = Date.now(); msgs.ebayCle.push(String(st.ebayCle.msg || 'refusée').slice(0, 80)); } } else if(st.ebayCle) delete A.ebayCle;
@@ -243,6 +248,7 @@ export function alertes(H, st, subs){
     if(msgs.integrite.length) out.push({ s, title:'🛡️ Carnet : fichiers du site modifiés', body: 'Différents de la dernière publication : ' + msgs.integrite[0] + ". Si ce n'est pas une mise à jour de ta part ou de Claude, demande une vérification à Claude Code avant de saisir ton mot de passe.", url:'./', tag:'carnet-integrite' });
     if(pr.zones && msgs.affaires.length) out.push({ s, title:'🔥 Carnet : bonne affaire sur une pièce d\'or', body: msgs.affaires.join('\n') + '\nPrix affiché hors livraison ; vérifie sur le site avant d\'acheter.', url:'./?vue=mymetals', tag:'carnet-affaire' });
     if(pr.pannes && msgs.secours.length) out.push({ s, title:'🧯 Carnet : une source de secours ne répond plus', body: msgs.secours[0] + ' — en échec à 2 tests de suite. Tant que la source principale marche, rien ne change ; si elle tombe aussi, ces données ne se mettraient plus à jour. Le robot reteste chaque jour.', url:'./', tag:'carnet-secours' });
+    if(msgs.creux.length) out.push({ s, title:'🚨 Carnet : signaux de creux du marché', body: msgs.creux.join('\n') + "\nRègle des cours BREIZH TRADE, pas testée sur le passé par le Carnet : regarde le cadre rouge de l'accueil et 🛒 Mes achats.", url:'./', tag:'carnet-creux' });
     if(msgs.ebayCle.length) out.push({ s, title:'🛍️ Carnet : clé eBay refusée', body:'eBay refuse la clé de son API (' + msgs.ebayCle[0] + '). Les offres eBay ne sont plus mises à jour. Vérifie le secret EBAY_CLE du dépôt carnet.', url:'./?vue=mymetals', tag:'carnet-ebay' });
     if(pr.pannes && msgs.secoursOk.length) out.push({ s, title:'✅ Carnet : sources de secours de nouveau en état', body: msgs.secoursOk[0] + ' répond de nouveau.', url:'./', tag:'carnet-secours' });
     if(pr.pannes && msgs.lent.length) out.push({ s, title:'⏱️ Carnet : le robot ralentit', body: msgs.lent.join('\n') + '. Rien n\'est cassé pour l\'instant ; Claude regardera lors de son audit.', url:'./', tag:'carnet-lent' });

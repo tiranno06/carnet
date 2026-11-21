@@ -333,6 +333,10 @@ try{
         say(`offres eBay : ${RE.brut ? RE.brut.length + ' annonce(s) lue(s) (' + RE.finies + '/' + RE.taches + ' recherches), ' : ''}${RE.nouveaux ? RE.nouveaux.length + ' annonce(s) récente(s) (' + RE.balaye + ' recherches), ' : ''}${Object.keys(RE.verif || {}).length} relue(s), ${RE.appels} demande(s) en ${Math.round((Date.now() - t0e)/1000)} s${RE.etat.ok ? '' : ' — ' + RE.etat.msg}${typeof n === 'string' ? ' — ' + n : ''}`); } }
     else await page.evaluate(() => { try{ ebayEnregistrer({ etat: { at: Date.now(), ok: false, msg: 'clé absente' }, appels: 0 }); }catch(e){} }); }catch(e){ say('offres eBay : ' + String(e.message || e).slice(0, 80)); }
   try{ jour.ebayCle = await page.evaluate(() => { try{ const e = ebayDonnees().etat; return e ? { ko: !e.ok && e.msg !== 'clé absente', msg: e.msg } : null; }catch(x){ return null; } }); }catch(e){}
+  // 22/11 : cadres « creux du marché » de l'accueil (21k) : état envoyé aux alertes (notification quand un cadre s'allume)
+  try{ jour.creux = await page.evaluate(async () => { try{ creuxCharger(); for(let i = 0; i < 60 && !(window.__creux && window.__creux.at); i++) await new Promise(r => setTimeout(r, 500));
+    const B = creuxBourse(), O = creuxOr(); return { bourse: !!(B && B.alerte), nb: B ? B.n : 0, or: !!(O && O.alerte), nbOr: O ? O.n : null }; }catch(e){ return null; } });
+    if(jour.creux) say(`creux du marché : Bourse ${jour.creux.nb}/5, or ${jour.creux.nbOr == null ? '?' : jour.creux.nbOr}/4`); }catch(e){}
   // 17/10 : pièces dont la prime est anormalement basse (d'après l'historique des relevés précédents) ; 21/11 : + bonnes affaires sur eBay
   try{ jour.affaires = await page.evaluate(() => { let A = []; try{ A = piecesAffaires() || []; }catch(e){} try{ A = A.concat(ebayAffaires() || []); }catch(e){} return A; }); }catch(e){}
   try{ jour.cibles = await page.evaluate(() => { try{ return piecesCiblesAtteintes(); }catch(e){ return null; } }); }catch(e){} // 23/10 : tes prix cibles par pièce
