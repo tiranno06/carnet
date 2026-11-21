@@ -153,7 +153,9 @@ try{
     const force = !!avant && +perso.mt_pieces_forcer > (avant.at || 0); if(force) say('prix des pièces : relevé demandé depuis l\'appli');
     const complet = !avant || force || Date.now() - (avant.at || 0) > 6*3600000 || (conf && avant.sig !== conf.sig);
     // sites personnels en échec (hors sites qui bloquent les robots) : nouvel essai au bout d'1 h, sans tout relever
-    const hoteDe = x => cleSite(x.url); // 18/11 : chaque boutique eBay a sa propre case
+    const hoteDe = x => cleSite(x.url);
+    // 21/11 : annonces eBay lues par l'API AVANT le contrôle du vendeur (des annonces d'autres vendeurs) : jamais gardées
+    const douteux = r => !!(r && r.cov && r.cov.mode === 'api' && !r.cov.pseudo); // 18/11 : chaque boutique eBay a sa propre case
     const aRefaire = !complet && conf ? conf.sites.filter(x => { const r = (avant.sites || {})[hoteDe(x)]; return r && r.err && !/protégé|refuse les robots/.test(r.err) && Date.now() - (r.at || 0) > 3600000; }) : [];
     // 17/11 : beaucoup de sites (36 boutiques suivies par un comparateur ajoutées) : à chaque passage, en plus, le site le plus anciennement lu
     // s'il a plus de 8 h (une minute environ) ; ainsi chaque site est relu environ deux fois par jour sans allonger beaucoup le passage
@@ -165,7 +167,7 @@ try{
       const P = avant; P.sites = P.sites || {}; let nS = 0;
       const R = await releveSitesUtilisateur(page.context(), { ...conf, sites: aRefaire }, P.sites, 100000, 6);
       for(const [h, r] of Object.entries(R)){ const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
-        P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, cov: r.cov || null, offres: offres.length ? offres : ((P.sites[h] || {}).offres || []) }; nS++;
+        P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, cov: r.cov || null, offres: offres.length ? offres : (douteux(P.sites[h]) ? [] : ((P.sites[h] || {}).offres || [])) }; nS++;
         say(`pièces — site personnel relu : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); }
       await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P));
     }
@@ -178,7 +180,7 @@ try{
         for(const [h, r] of Object.entries(R)){
           const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
           const ancien = P.sites[h] || {};
-          P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, cov: r.cov || null, offres: offres.length ? offres : (r.err ? (ancien.offres || []) : []) };
+          P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, cov: r.cov || null, offres: offres.length ? offres : (r.err && !douteux(ancien) ? (ancien.offres || []) : []) };
           nS++; say(`pièces — site personnel n°${nS} : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); // jamais le nom du site : le journal est public
         }
       }

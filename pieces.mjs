@@ -151,7 +151,7 @@ async function ebayApi(chemin){ const t = await ebayJeton();
 export async function ebayVendeur(vendeur, mots = [], limiteMs = 75000){
   // 21/11 : temps limité (75 s par boutique) : d'abord une recherche par pièce suivie (peu d'annonces, l'essentiel), puis toute la catégorie
   // Monnaies du vendeur tant qu'il reste du temps ; « complet » seulement si tout a été parcouru
-  const t0 = Date.now(), vus = new Map(), f = encodeURIComponent(`sellers:{${vendeur}},buyingOptions:{FIXED_PRICE}`);
+  const t0 = Date.now(), vus = new Map(), f = `sellers:%7B${encodeURIComponent(vendeur)}%7D,buyingOptions:%7BFIXED_PRICE%7D`; // forme de la documentation d'eBay
   let appels = 0, complet = true, total = 0, autres = 0;
   const balayer = async base => { for(let off = 0; off < 10000; off += 200){ if(Date.now() - t0 > limiteMs){ complet = false; return; }
     const j = await ebayApi(`item_summary/search?${base}&filter=${f}&limit=200&offset=${off}`); appels++; const L = (j && j.itemSummaries) || [];
@@ -168,6 +168,8 @@ export async function ebayTester(){ if(!(process.env.EBAY_CLE || '').trim()) ret
 // 21/11 : le nom de la boutique (adresse /str/…) n'est pas toujours le pseudo du vendeur, et eBay IGNORE un filtre de vendeur inconnu
 // (il renvoyait alors des annonces de tout eBay) : le pseudo est lu sur une annonce de la boutique (page 1, lisible), puis chaque annonce
 // reçue est contrôlée (même vendeur) avant d'être gardée
+export async function ebayPseudoOk(v){ const j = await ebayApi(`item_summary/search?category_ids=11116&filter=sellers:%7B${encodeURIComponent(v)}%7D&limit=50`); const L = (j && j.itemSummaries) || [];
+  return L.length > 0 && L.every(x => String((x.seller || {}).username || '').toLowerCase() === v); }
 export async function ebayPseudo(urlAnnonce){ const id = (String(urlAnnonce).match(/\/itm\/(?:[^/]+\/)?(\d{9,15})/) || [])[1]; if(!id) return null;
   const j = await ebayApi('item/get_item_by_legacy_id?legacy_item_id=' + id); return (j && j.seller && j.seller.username) || null; }
 async function ebayFiche(url){ const id = (String(url).match(/\/itm\/(?:[^/]+\/)?(\d{9,15})/) || [])[1]; if(!id) return null;
@@ -220,10 +222,13 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
       let apiFait = false, apiErr = null;
       if(eb && ebayActif()){ try{
         // pseudo du vendeur : gardé du passage précédent, sinon lu sur une annonce de la page 1 de la boutique
-        let pseudo = ((anciens[cleSite(S.url)] || {}).cov || {}).pseudo || null;
+        let pseudo = ((anciens[cleSite(S.url)] || {}).cov || {}).pseudo || S.pseudo || null;
+        // 1. le nom écrit dans l'adresse de la boutique, accepté seulement si eBay renvoie des annonces de CE vendeur
+        if(!pseudo){ const v = decodeURIComponent(eb[1]).toLowerCase(); try{ if(await ebayPseudoOk(v)) pseudo = v; }catch(e){} }
+        // 2. sinon : lu sur une annonce de la page 1 de la boutique
         if(!pseudo){ let R1 = null; try{ R1 = await lirePage(ctx, S.url); }catch(e){}
           for(const l of ((R1 && R1.liens) || []).filter(l => /\/itm\//.test(l.u)).slice(0, 3)){ try{ pseudo = await ebayPseudo(l.u); }catch(e){} if(pseudo) break; } }
-        if(!pseudo) throw new Error('pseudo du vendeur introuvable');
+        if(!pseudo) throw new Error('pseudo du vendeur eBay introuvable');
         const R = await ebayVendeur(pseudo, conf.motsEbay || conf.mots || []); R.produits.forEach(p => produits.push(p));
         cov = { mode: 'api', pseudo, complet: R.complet, annonces: R.produits.length, total: R.total, autres: R.autres }; apiFait = true;
         if(!R.produits.length) err = 'aucune annonce « Achat immédiat » trouvée pour ce vendeur';
