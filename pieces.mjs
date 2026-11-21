@@ -164,7 +164,7 @@ export async function ebayVendeur(vendeur, mots = [], limiteMs = 75000, mp = 'EB
   const balayer = async base => { for(let off = 0; off < 10000; off += 200){ if(Date.now() - t0 > limiteMs){ complet = false; return; }
     const j = await ebayApi(`item_summary/search?${base}&filter=${f}&limit=200&offset=${off}`, mp); appels++; const L = (j && j.itemSummaries) || [];
     if(base.startsWith('category')) total = (j && j.total) || total;
-    L.forEach(x => { const p = x.price || {}; if(String((x.seller || {}).username || '').toLowerCase() !== vendeur.toLowerCase()) { autres++; return; } if(p.currency === 'EUR' && +p.value > 0 && x.itemWebUrl) { const o = ebayResume(x, mp); vus.set(x.itemId, { t: String(x.title || '').slice(0, 220), prix: +p.value, url: x.itemWebUrl.split('?')[0], api: 1, port: o ? o.port : null, v: String((x.seller || {}).username || '').toLowerCase() }); } });
+    L.forEach(x => { const p = x.price || {}; if(String((x.seller || {}).username || '').toLowerCase() !== vendeur.toLowerCase()) { autres++; return; } if(p.currency === 'EUR' && +p.value > 0 && x.itemWebUrl) { const o = ebayResume(x, mp); vus.set(x.itemId, { t: String(x.title || '').slice(0, 220), prix: +p.value, url: ebayUrlFr(x.itemWebUrl), api: 1, port: o ? o.port : null, v: String((x.seller || {}).username || '').toLowerCase() }); } });
     if(L.length < 200 || !j.next) return; } };
   for(const q of [...new Set(mots.map(m => String(m).toLowerCase().replace(/\b(or|argent|1 ?oz)\b/g, ' ').replace(/\s+/g, ' ').trim()).filter(m => m.length > 2))]) await balayer('q=' + encodeURIComponent(q));
   await balayer('category_ids=11116');
@@ -186,13 +186,15 @@ async function ebayFiche(url){ const id = (String(url).match(/\/itm\/(?:[^/]+\/)
 // ==== 21/11 (demande du propriétaire : section « Offres eBay ») : chaque pièce suivie cherchée sur TOUT eBay (France et eBay voisins),
 // annonces livrables en France, envoyées depuis l'Union européenne, avec frais de port vers la France, réputation du vendeur, enchères à part.
 // La reconnaissance des pièces, les filtres de confiance et les calculs sont faits ensuite par l'appli (ebayEnregistrer, 11g).
+// la même annonce, ouverte sur ebay.fr (l'API donne parfois l'adresse d'eBay Espagne, Pays-Bas… selon la place de marché interrogée)
+export const ebayUrlFr = u => String(u || '').split('?')[0].replace(/^https?:\/\/(www\.)?ebay\.[a-z.]+\/itm\//i, 'https://www.ebay.fr/itm/');
 const EBAY_UE = new Set('AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE'.split(' '));
 const EBAY_VOISINS = ['EBAY_FR', 'EBAY_DE', 'EBAY_BE', 'EBAY_IT', 'EBAY_NL', 'EBAY_AT', 'EBAY_ES'];
 // une annonce de l'API, réduite à ce qui sert (prix et port en euros, vendeur, pays, enchère et date de fin)
 export function ebayResume(x, mp){ if(!x) return null; const B = x.buyingOptions || [], p = x.price || {}, cb = x.currentBidPrice || {}, so = (x.shippingOptions || [])[0] || {}, sc = so.shippingCost || {}, s = x.seller || {};
   const ench = B.includes('AUCTION') && !B.includes('FIXED_PRICE'), prix = +((ench ? cb.value : null) || p.value), cur = (ench ? cb.currency : null) || p.currency;
   if(cur !== 'EUR' || !(prix > 0) || !x.itemWebUrl) return null;
-  return { t: String(x.title || '').slice(0, 200), prix, port: sc.currency === 'EUR' && sc.value != null ? +sc.value : null, url: x.itemWebUrl.split('?')[0], v: String(s.username || ''),
+  return { t: String(x.title || '').slice(0, 200), prix, port: sc.currency === 'EUR' && sc.value != null ? +sc.value : null, url: ebayUrlFr(x.itemWebUrl), v: String(s.username || ''),
     fb: s.feedbackPercentage != null ? +s.feedbackPercentage : null, n: s.feedbackScore != null ? +s.feedbackScore : null, pays: String((x.itemLocation || {}).country || ''), mp, ench: ench ? 1 : 0,
     fin: ench ? (x.itemEndDate || null) : null, img: ((x.image || {}).imageUrl) || null }; }
 // fiche complète d'une annonce (lien collé par le propriétaire, contrôle de disponibilité)
