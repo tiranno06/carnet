@@ -465,7 +465,11 @@ export async function releveAmpleur(){
 // 45 derniers jours (GDELT, base publique d'articles faite pour la lecture automatique) ; rien d'inventé : pas de chiffre trouvé = inconnu
 export async function releveBofa(){
   const q = encodeURIComponent('"fund manager survey" cash');
-  const A = (JSON.parse(await lire(`https://api.gdeltproject.org/api/v2/doc/doc?query=${q}&mode=artlist&maxrecords=100&timespan=45d&format=json&sort=datedesc`)).articles || []);
+  // GDELT n'accepte qu'une demande toutes les 5 secondes (le robot l'interroge aussi ailleurs) : jusqu'à 3 essais espacés de 7 s
+  let A = null, der = '';
+  for(let essai = 0; essai < 3 && !A; essai++){ if(essai) await new Promise(r => setTimeout(r, 7000));
+    try{ der = await lire(`https://api.gdeltproject.org/api/v2/doc/doc?query=${q}&mode=artlist&maxrecords=100&timespan=45d&format=json&sort=datedesc`); A = (JSON.parse(der).articles || []); }catch(e){ der = der || String(e.message || e); } }
+  if(!A) throw new Error('GDELT : ' + String(der).replace(/\s+/g, ' ').slice(0, 70));
   for(const a of A){ const t = String(a.title || ''); const m = t.match(/cash[^%\d]{0,45}(\d(?:[.,]\d)?)\s?%/i) || t.match(/(\d(?:[.,]\d)?)\s?%\s*(?:in\s+|of\s+)?cash/i);
     if(m){ const v = parseFloat(m[1].replace(',', '.')); if(v >= 2 && v <= 8) return { at: Date.now(), cash: v, titre: t.slice(0, 160), source: String(a.domain || ''), date: String(a.seendate || '').slice(0, 8) }; } }
   return { at: Date.now(), cash: null, lus: A.length };

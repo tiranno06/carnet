@@ -142,10 +142,13 @@ async function ebayJetonNeuf(){
   const r = await fetch('https://api.ebay.com/identity/v1/oauth2/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', authorization: 'Basic ' + Buffer.from((process.env.EBAY_CLE || '').trim()).toString('base64') },
     body: 'grant_type=client_credentials&scope=' + encodeURIComponent('https://api.ebay.com/oauth/api_scope'), signal: AbortSignal.timeout(20000) });
   if(!r.ok) throw new Error(`clé eBay refusée (${r.status})`); const j = await r.json(); EBAY_TOK = { t: j.access_token, fin: Date.now() + (j.expires_in || 7200)*1000 }; return EBAY_TOK.t; }
-async function ebayApi(chemin, mp = 'EBAY_FR'){ const t = await ebayJeton();
-  for(let essai = 0; essai < 3; essai++){ const r = await fetch('https://api.ebay.com/buy/browse/v1/' + chemin, { headers: { authorization: 'Bearer ' + t, 'X-EBAY-C-MARKETPLACE-ID': mp, 'X-EBAY-C-ENDUSERCTX': 'contextualLocation=country%3DFR%2Czip%3D75001', 'accept-language': 'fr-FR' }, signal: AbortSignal.timeout(25000) });
+// 22/11 : TOUTES les demandes à l'API sont comptées (quota eBay : 5 000 par jour) ; un refus pour quota (429) est signalé comme tel
+let EBAY_APPELS = 0, EBAY_QUOTA_ATTEINT = false;
+export const ebayAppels = () => EBAY_APPELS, ebayQuotaAtteint = () => EBAY_QUOTA_ATTEINT;
+async function ebayApi(chemin, mp = 'EBAY_FR'){ if(EBAY_QUOTA_ATTEINT) throw new Error('quota du jour atteint (5 000 demandes)'); const t = await ebayJeton();
+  for(let essai = 0; essai < 3; essai++){ const r = await fetch('https://api.ebay.com/buy/browse/v1/' + chemin, { headers: { authorization: 'Bearer ' + t, 'X-EBAY-C-MARKETPLACE-ID': mp, 'X-EBAY-C-ENDUSERCTX': 'contextualLocation=country%3DFR%2Czip%3D75001', 'accept-language': 'fr-FR' }, signal: AbortSignal.timeout(25000) }); EBAY_APPELS++; if(r.status === 429){ EBAY_QUOTA_ATTEINT = true; throw new Error('quota du jour atteint (5 000 demandes)'); }
     if(r.status === 404) return null; if(r.ok) return r.json(); if(r.status !== 429 && r.status < 500) throw new Error('API eBay ' + r.status); await new Promise(z => setTimeout(z, 3000*(essai + 1))); }
-  throw new Error('API eBay indisponible'); }
+  throw new Error(EBAY_QUOTA_ATTEINT ? 'quota du jour atteint (5 000 demandes)' : 'API eBay indisponible'); }
 // toutes les annonces « Achat immédiat » en euros d'un vendeur : catégorie Monnaies entière, puis or / argent / chaque pièce suivie (une annonce
 // rangée ailleurs est ainsi retrouvée) ; une même annonce n'est comptée qu'une fois
 // 21/11 : la recherche de l'API ne voit que les annonces publiées sur la place de marché demandée : un vendeur allemand publie sur eBay
@@ -166,12 +169,19 @@ export async function ebayVendeur(vendeur, mots = [], limiteMs = 75000, mp = 'EB
     if(base.startsWith('category')) total = (j && j.total) || total;
     L.forEach(x => { const p = x.price || {}; if(String((x.seller || {}).username || '').toLowerCase() !== vendeur.toLowerCase()) { autres++; return; } if(p.currency === 'EUR' && +p.value > 0 && x.itemWebUrl) { const o = ebayResume(x, mp); vus.set(x.itemId, { t: String(x.title || '').slice(0, 220), prix: +p.value, url: ebayUrlFr(x.itemWebUrl), api: 1, port: o ? o.port : null, v: String((x.seller || {}).username || '').toLowerCase() }); } });
     if(L.length < 200 || !j.next) return; } };
-  for(const q of [...new Set(mots.map(m => String(m).toLowerCase().replace(/\b(or|argent|1 ?oz)\b/g, ' ').replace(/\s+/g, ' ').trim()).filter(m => m.length > 2))]) await balayer('q=' + encodeURIComponent(q));
+  // 22/11 : d'abord toute la catégorie Monnaies du vendeur (2 à 5 demandes pour une boutique de 400 annonces) ; les recherches par pièce
+  // seulement si ce balayage n'a pas pu tout lire (boutique immense) : avant, jusqu'à ~80 demandes par boutique et par heure (quota dépassé)
   await balayer('category_ids=11116');
+  if(!complet || (total && vus.size < total*0.5)){ complet = true; for(const q of [...new Set(mots.map(m => String(m).toLowerCase().replace(/\b(or|argent|1 ?oz)\b/g, ' ').replace(/\s+/g, ' ').trim()).filter(m => m.length > 2))].slice(0, 12)) await balayer('q=' + encodeURIComponent(q)); }
   return { produits: [...vus.values()], appels, complet, total, autres, mp }; }
+// 22/11 : demandes restantes aujourd'hui pour la Browse API (outil officiel d'eBay « Developer Analytics ») ; null si inconnu
+export async function ebayQuotaRestant(){ try{ const t = await ebayJeton(); const r = await fetch('https://api.ebay.com/developer/analytics/v1_beta/rate_limit/?api_name=browse', { headers: { authorization: 'Bearer ' + t }, signal: AbortSignal.timeout(20000) });
+  if(!r.ok) return null; const j = await r.json(); let rest = null, lim = null;
+  (j.rateLimits || []).forEach(a => (a.resources || []).forEach(x => (x.rates || []).forEach(z => { if(z.remaining != null && (rest == null || z.remaining < rest)){ rest = z.remaining; lim = z.limit; } })));
+  return rest == null ? null : { rest, lim }; }catch(e){ return null; } }
 // 21/11 : état de la clé, pour le journal du robot (jamais la clé elle-même)
 export async function ebayTester(){ if(!(process.env.EBAY_CLE || '').trim()) return 'absente (boutiques eBay lues en partie)'; if(!ebayActif()) return 'mal écrite (attendu « App ID:Cert ID », sans espace)';
-  try{ await ebayJeton(); const j = await ebayApi('item_summary/search?q=gold&limit=1'); return j ? `acceptée ✅ (API joignable, ${j.total || 0} annonces « gold » sur eBay France)` : 'acceptée, mais recherche vide'; }catch(e){ return 'refusée : ' + String(e.message || e).slice(0, 80); } }
+  try{ await ebayJeton(); const j = await ebayApi('item_summary/search?q=gold&limit=1'); const q = await ebayQuotaRestant(); return (j ? `acceptée ✅ (API joignable)` : 'acceptée, mais recherche vide') + (q ? ` · ${q.rest} demandes restantes aujourd'hui sur ${q.lim}` : ''); }catch(e){ return EBAY_QUOTA_ATTEINT ? 'acceptée, mais quota du jour atteint : reprise demain' : 'refusée : ' + String(e.message || e).slice(0, 80); } }
 // fiche d'une annonce eBay par l'API (prix et disponibilité), pour le triple contrôle
 // 21/11 : le nom de la boutique (adresse /str/…) n'est pas toujours le pseudo du vendeur, et eBay IGNORE un filtre de vendeur inconnu
 // (il renvoyait alors des annonces de tout eBay) : le pseudo est lu sur une annonce de la boutique (page 1, lisible), puis chaque annonce
@@ -208,13 +218,13 @@ export async function ebayFicheComplete(url){ const id = (String(url).match(/\/i
 export async function ebayMarche(conf, avant = {}, budgetMs = 110000){
   const t0 = Date.now(), R = { etat: { at: Date.now(), ok: true, msg: '' }, appels: 0 };
   try{ await ebayJeton(); }catch(e){ R.etat = { at: Date.now(), ok: false, msg: String(e.message || e).slice(0, 80) }; return R; }
-  const plein = conf.force || !avant || !avant.brutAt || Date.now() - avant.brutAt > 6*3600000 || avant.sig !== conf.sig;
+  const plein = !(conf.quota && conf.quota.rest < 400) && (conf.force || !avant || !avant.brutAt || Date.now() - avant.brutAt > 6*3600000 || avant.sig !== conf.sig);
   // 21/11 (demande du propriétaire : voir les nouvelles annonces au plus vite) : entre deux recherches complètes, à CHAQUE passage, une partie
   // des recherches « annonces les plus récentes » (tour à tour : chaque pièce sur chaque eBay environ toutes les heures), dans la limite des
   // 5 000 demandes par jour autorisées par eBay (au-delà de 3 800 demandes dans la journée, ce balayage s'arrête jusqu'au lendemain)
-  if(!plein && (conf.pieces || []).length && (conf.appelsJour || 0) < 3800){
+  if(!plein && (conf.pieces || []).length && (conf.appelsJour || 0) < 3800 && !(conf.quota && conf.quota.rest < 800)){
     const taches = []; conf.pieces.forEach(p => EBAY_VOISINS.forEach(mp => taches.push([p, (p.q || [])[0], mp])));
-    const n = Math.min(30, taches.length), dep = (avant.rot || 0) % taches.length, choix = Array.from({ length: n }, (_, i) => taches[(dep + i) % taches.length]); R.rot = (dep + n) % taches.length;
+    const n = Math.min(15, taches.length), dep = (avant.rot || 0) % taches.length, choix = Array.from({ length: n }, (_, i) => taches[(dep + i) % taches.length]); R.rot = (dep + n) % taches.length;
     const neuf = new Map(); let i = 0;
     const ouvrier = async () => { while(i < choix.length && Date.now() - t0 < budgetMs*0.5){ const [P, q, mp] = choix[i++]; if(!q) continue;
       const prixF = P.min > 0 ? `,price:%5B${Math.floor(P.min)}..${Math.ceil(P.max || P.min*3)}%5D,priceCurrency:EUR` : '';
@@ -231,9 +241,9 @@ export async function ebayMarche(conf, avant = {}, budgetMs = 110000){
         ((j && j.itemSummaries) || []).forEach(x => { const o = ebayResume(x, mp); if(o && EBAY_UE.has(o.pays)) brut.set(x.itemId || o.url, o); }); finies++; }catch(e){ err++; } } };
     await Promise.all(Array.from({ length: 6 }, ouvrier));
     R.brut = [...brut.values()]; R.complet = finies === taches.length; R.taches = taches.length; R.finies = finies; R.erreurs = err;
-    if(!finies && err){ R.etat = { at: Date.now(), ok: false, msg: 'recherches eBay en échec' }; } }
+    if(!finies && err){ R.etat = EBAY_QUOTA_ATTEINT ? { at: Date.now(), ok: true, msg: 'quota du jour atteint : reprise demain', quota: 1 } : { at: Date.now(), ok: false, msg: 'recherches eBay en échec' }; } }
   // disponibilité et prix des meilleures offres, relus à chaque passage (au plus 40, 25 s)
-  R.verif = {}; const V = (conf.verifier || []).slice(0, (conf.appelsJour || 0) > 4300 ? 5 : 40); let k = 0;
+  R.verif = {}; const V = (conf.verifier || []).slice(0, (conf.appelsJour || 0) > 4300 || (conf.quota && conf.quota.rest < 300) ? 5 : 25); let k = 0;
   const ver = async () => { while(k < V.length && Date.now() - t0 < budgetMs*0.85){ const u = V[k++]; try{ const F = await ebayFicheComplete(u); R.appels++; R.verif[u] = { at: Date.now(), dispo: !!F.dispo, lu: F.lu, port: F.r ? F.r.port : null }; }catch(e){} } };
   await Promise.all(Array.from({ length: 4 }, ver));
   // liens d'annonces collés dans l'appli
@@ -300,7 +310,8 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
       }catch(e){ apiErr = String(e.message || e).slice(0, 60); } }
       if(eb && !apiFait){
         // eBay refuse les recherches automatiques mais montre la boutique : on lit ses pages (enchères écartées)
-        cov = { mode: 'pages', complet: false, pages: 0, bloque: false, apiErr };
+        const anc = ((anciens[cleSite(S.url)] || {}).cov) || {}; // 22/11 : le pseudo et la place de marché déjà trouvés sont gardés même si l'API ne répond pas
+        cov = { mode: 'pages', complet: false, pages: 0, bloque: false, apiErr, ...(anc.pseudo ? { pseudo: anc.pseudo } : {}), ...(anc.mp ? { mp: anc.mp } : {}) };
         for(let pg = 1; pg <= 8; pg++){ if(Date.now() - ts > 90000) break;
           const u = pg === 1 ? S.url : `https://www.ebay.fr/str/${encodeURIComponent(eb[1])}?_pgn=${pg}`; // page 1 : l'adresse normale (les options déclenchent la vérification anti-robot)
           // 19/11 : eBay renvoie parfois une page d'erreur : un nouvel essai 6 s plus tard, et une page 1 ratée n'arrête plus la boutique

@@ -6,7 +6,7 @@ import http from 'node:http';
 import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
-import { relevePieces, releveSitesUtilisateur, verifierLivraison, releveFraisComparateur, verifierOffres, cleSite, ebayActif, ebayTester, ebayMarche } from './pieces.mjs';
+import { relevePieces, releveSitesUtilisateur, verifierLivraison, releveFraisComparateur, verifierOffres, cleSite, ebayActif, ebayTester, ebayMarche, ebayAppels, ebayQuotaRestant, ebayQuotaAtteint } from './pieces.mjs';
 import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux, releveImmo, releveAmpleur, releveBofa } from './donnees-plus.mjs';
 
 const t0 = Date.now();
@@ -216,10 +216,16 @@ try{
     if(!O.eu || Date.now() - O.eu.at > 20*3600000){ try{ O.eu = await releveEurope(); neuf = true; }catch(e){ say('Europe (INSEE, BCE) : ' + e.message); } }
     if(!O.def || Date.now() - O.def.at > 20*3600000){ try{ O.def = await releveDefaillances(); neuf = true; }catch(e){ say('défaillances d\'entreprises : ' + e.message); } }
     // 22/11 : signaux de capitulation du cours « Le marnage » (reprise générale des actions, liquidités des gérants), une fois par jour
-    if(!O.creux || Date.now() - (O.creux.at || 0) > 20*3600000){ const C = { ...(O.creux || {}), at: Date.now() };
-      try{ C.ampleur = await releveAmpleur(); }catch(e){ say('reprise générale des actions : ' + e.message); }
-      try{ const b = await releveBofa(); if(b.cash != null || !C.bofa || C.bofa.cash == null || Date.now() - C.bofa.at > 40*86400000) C.bofa = b; else C.bofa.vu = Date.now(); }catch(e){ say('liquidités des gérants (presse) : ' + String(e.message).slice(0, 60)); }
-      O.creux = C; neuf = true; }
+    // 22/11 (vérification) : chaque signal à part ; reprise générale une fois par jour ; liquidités des gérants : nouvel essai toutes les 6 h
+    // tant que le chiffre manque (ou après une erreur), sinon une fois par jour ; un chiffre trouvé est gardé 40 jours s'il n'y en a pas de nouveau
+    { const C = { ...(O.creux || {}) };
+      if(!C.ampleur || Date.now() - (C.ampleur.at || 0) > 20*3600000){ try{ C.ampleur = await releveAmpleur(); neuf = true; }catch(e){ say('reprise générale des actions : ' + String(e.message).slice(0, 70)); } }
+      const b0 = C.bofa, dernier = b0 ? (b0.essai || b0.at || 0) : 0;
+      if(!b0 || Date.now() - dernier > (b0.cash == null || b0.err ? 6 : 20)*3600000){
+        try{ const b = await releveBofa(); if(b.cash != null || !b0 || b0.cash == null || Date.now() - (b0.at || 0) > 40*86400000) C.bofa = b; else C.bofa = { ...b0, essai: Date.now(), err: null }; }
+        catch(e){ C.bofa = { ...(b0 || { cash: null }), essai: Date.now(), err: String(e.message || e).slice(0, 80) }; say('liquidités des gérants (presse) : ' + String(e.message).slice(0, 70)); }
+        neuf = true; }
+      C.at = Date.now(); O.creux = C; }
     // 23/10 : nouvelles données (taux, INSEE, carburants, or de Shanghai et de Londres, crypto), chacune une fois par jour
     try{ const N = await releveNouveaux(O.nv); if(JSON.stringify(N.o) !== JSON.stringify(O.nv || {})){ O.nv = N.o; neuf = true; } if(N.err.length) say('nouvelles données : ' + N.err.join(' ; ')); }catch(e){ say('nouvelles données : relevé impossible'); }
     if(neuf) await ecrit('mt_or_plus', O);
@@ -329,7 +335,8 @@ try{
   try{ if(ebayActif()){ const t0e = Date.now(), conf = await page.evaluate(() => { try{ return ebayConfRobot(); }catch(e){ return null; } });
       if(conf){ const avantE = await page.evaluate(() => { try{ return JSON.parse(localStorage.getItem('mt_pieces_ebay') || 'null'); }catch(e){ return null; } }) || {};
         conf.force = +perso.mt_pieces_forcer > (avantE.brutAt || 0); // bouton « Relever les prix maintenant » / « Chercher maintenant »
-        const RE = await ebayMarche(conf, avantE); const n = await page.evaluate(R => { try{ return ebayEnregistrer(R); }catch(e){ return 'erreur ' + String(e.message).slice(0, 60); } }, RE);
+        conf.quota = await ebayQuotaRestant(); // demandes restantes aujourd'hui (outil officiel d'eBay)
+        const RE = await ebayMarche(conf, avantE); RE.appels = ebayAppels(); /* toutes les demandes de ce passage (boutiques suivies comprises) */ if(conf.quota) RE.etat.quota = conf.quota; if(ebayQuotaAtteint()) RE.etat.note = 'quota du jour atteint : reprise demain'; const n = await page.evaluate(R => { try{ return ebayEnregistrer(R); }catch(e){ return 'erreur ' + String(e.message).slice(0, 60); } }, RE);
         say(`offres eBay : ${RE.brut ? RE.brut.length + ' annonce(s) lue(s) (' + RE.finies + '/' + RE.taches + ' recherches), ' : ''}${RE.nouveaux ? RE.nouveaux.length + ' annonce(s) récente(s) (' + RE.balaye + ' recherches), ' : ''}${Object.keys(RE.verif || {}).length} relue(s), ${RE.appels} demande(s) en ${Math.round((Date.now() - t0e)/1000)} s${RE.etat.ok ? '' : ' — ' + RE.etat.msg}${typeof n === 'string' ? ' — ' + n : ''}`); } }
     else await page.evaluate(() => { try{ ebayEnregistrer({ etat: { at: Date.now(), ok: false, msg: 'clé absente' }, appels: 0 }); }catch(e){} }); }catch(e){ say('offres eBay : ' + String(e.message || e).slice(0, 80)); }
   try{ jour.ebayCle = await page.evaluate(() => { try{ const e = ebayDonnees().etat; return e ? { ko: !e.ok && e.msg !== 'clé absente', msg: e.msg } : null; }catch(x){ return null; } }); }catch(e){}
