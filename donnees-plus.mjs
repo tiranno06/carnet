@@ -138,6 +138,10 @@ export function lireCarburants(buf){ // feuille « Prices with taxes » : colonn
   }
   if(out.length < 200) throw new Error('prix à la pompe : historique trop court'); return out.sort((a, b) => a[0] < b[0] ? -1 : 1);
 }
+// 22/11 (soir) : Energy-Charts limite le nombre de demandes (« 429 ») et coupe parfois la connexion (« fetch failed ») : une pause de 2 s
+// entre deux demandes, et 2 essais (8 s d'attente) avant d'abandonner pour ce passage ; ce qui a déjà été lu est gardé (repris au passage suivant)
+async function lireEC(url){ let e0; for(const att of [0, 8000]){ if(att) await new Promise(r => setTimeout(r, att)); await new Promise(r => setTimeout(r, 2000));
+  try{ return await lire(url); }catch(e){ e0 = e; if(!/ 429$| 5\d\d$|fetch failed|timeout|aborted/i.test(String(e.message))) throw e; } } throw e0; }
 export async function releveNouveaux(prev){
   const o = { ...(prev || {}) }, vieux = (k, h = 20) => !o[k] || !o[k].at || Date.now() - o[k].at > h*3600000, err = [];
   const essai = async (k, f, h) => { if(!vieux(k, h)) return; try{ o[k] = { ...(await f(o[k])), at: Date.now() }; }catch(e){ err.push(k + ' : ' + e.message); } };
@@ -319,6 +323,7 @@ async function rhinReleve(p){
 // Historique rattrapé depuis 2019, 3 mois par pays et par passage (comme la consommation).
 async function prixReleve(p){
   const o = { j: { fr: {}, de: {}, ...((p && p.j) || {}) } }, auj = new Date(), ZONE = { fr: 'FR', de: 'DE-LU' };
+  delete o.retard;
   for(const pays of ['fr', 'de']){
     const J = { ...(o.j[pays] || {}) }, ks = Object.keys(J).sort(), deb = ks[0], fin = ks[ks.length - 1], plages = [];
     const mois = (y, m) => [new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10), new Date(Date.UTC(y, m + 1, 0)).toISOString().slice(0, 10)];
@@ -327,11 +332,13 @@ async function prixReleve(p){
     let y = deb ? +deb.slice(0, 4) : auj.getUTCFullYear(), m = deb ? +deb.slice(5, 7) - 1 : auj.getUTCMonth();
     for(let k = 0; k < 3 && (!deb || deb > '2019-01-01'); k++){ m--; if(m < 0){ m = 11; y--; } if(y < 2019) break; plages.push(mois(y, m)); }
     for(const [a, b] of plages){
-      const d = JSON.parse(await lire(`https://api.energy-charts.info/price?bzn=${ZONE[pays]}&start=${a}&end=${b}`));
+      let d; try{ d = JSON.parse(await lireEC(`https://api.energy-charts.info/price?bzn=${ZONE[pays]}&start=${a}&end=${b}`)); }
+      catch(e){ if(Object.keys(J).length){ o.retard = 'Energy-Charts : ' + String(e.message).slice(0, 40) + ' (repris au prochain passage)'; break; } throw e; } // 22/11 : ce qui est déjà lu est gardé
       if(!Array.isArray(d.unix_seconds) || !Array.isArray(d.price)) throw new Error('Energy-Charts (prix) : format changé');
       const S = {}; d.unix_seconds.forEach((t, i) => { const v = d.price[i]; if(v == null || !isFinite(v)) return; const k = jourParis(t*1000); (S[k] = S[k] || [0, 0]); S[k][0] += v; S[k][1]++; });
       const pas = d.unix_seconds.length > 1 ? Math.max(60, d.unix_seconds[1] - d.unix_seconds[0]) : 3600, mini = Math.floor(20*3600/pas);
       Object.entries(S).forEach(([k, [s, n]]) => { if(n >= mini) J[k] = Math.round(s/n*10)/10; });
+      o.j[pays] = J; // 22/11 : gardé après chaque période lue (une limite de demandes en cours de route ne fait plus tout perdre)
     }
     o.j[pays] = J;
   }
@@ -379,7 +386,7 @@ async function elecReleve(p){
     let y = deb ? +deb.slice(0, 4) : auj.getUTCFullYear(), m = deb ? +deb.slice(5, 7) - 1 : auj.getUTCMonth();
     for(let k = 0; k < 3 && (!deb || deb > '2019-01-01'); k++){ m--; if(m < 0){ m = 11; y--; } if(y < 2019) break; plages.push(mois(y, m)); }
     for(const [a, b] of plages){
-      const d = JSON.parse(await lire(`https://api.energy-charts.info/public_power?country=${pays}&start=${a}&end=${b}`)), L = (d.production_types || []).find(x => x.name === 'Load');
+      const d = JSON.parse(await lireEC(`https://api.energy-charts.info/public_power?country=${pays}&start=${a}&end=${b}`)), L = (d.production_types || []).find(x => x.name === 'Load');
       if(!L || !Array.isArray(d.unix_seconds)) throw new Error('Energy-Charts : format changé');
       const S = {}; d.unix_seconds.forEach((t, i) => { const v = L.data[i]; if(v == null || !isFinite(v)) return; const k = jourParis(t*1000); (S[k] = S[k] || [0, 0]); S[k][0] += v; S[k][1]++; });
       // journée assez complète (≥ 20 h sur 24) ; le pas varie selon les années (1 h pour la France avant 2026, 15 min ensuite) ; MW → GW
