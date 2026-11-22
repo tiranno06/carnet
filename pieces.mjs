@@ -333,8 +333,8 @@ export async function releveSitesUtilisateur(ctx, conf, anciens = {}, budgetMs =
           nouveaux.slice(0, 30).forEach(l => { if(!file.includes(l.u)) file.push(l.u); });
           file.sort((a, b) => score(nouveaux.find(l => l.u === b) || { t: '', u: b }) - score(nouveaux.find(l => l.u === a) || { t: '', u: a }));
         }
+        cov = { mode: 'pages', pages: n, reste: file.filter(u => !vus.has(u)).length, complet: !file.some(u => !vus.has(u)) };
       }
-      if(!eb) cov = { mode: 'pages', pages: n, reste: file.filter(u => !vus.has(u)).length, complet: !file.some(u => !vus.has(u)) };
       if(!produits.length && !err) err = 'aucun prix trouvé sur ce site';
     }catch(e){ err = String(e.message || e).slice(0, 80); }
     // 18/11 : quand la FICHE d'un produit a été lue, son prix fait foi : les autres prix lus ailleurs pour la même adresse (page « valeur des
