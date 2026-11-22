@@ -159,7 +159,7 @@ export function alertes(H, st, subs){
   if(Array.isArray(st.baisses)){ A.bx = A.bx || {}; Object.keys(A.bx).forEach(u => { if(Date.now() - A.bx[u] > 14*86400000) delete A.bx[u]; });
     st.baisses.forEach(x => { if(!x || !x.u || (A.bx[x.u] && Date.now() - A.bx[x.u] < 86400000)) return; A.bx[x.u] = Date.now();
       const e = v => String(Math.round(v * 100) / 100).replace('.', ',') + ' €';
-      msgs.baisses.push(`${x.nom} chez ${x.m} : ${e(x.avant)} → ${e(x.apres)} (livraison comprise)`); }); }
+      msgs.baisses.push(`${x.nom} chez ${x.m} : ${e(x.avant)} → ${e(x.apres)} (${x.liv === false ? 'prix seul' : 'livraison comprise'})`); }); }
   msgs.affaires = [];
   if(Array.isArray(st.affaires)){ A.aff = A.aff || {}; const vus = new Set();
     st.affaires.forEach(x => { if(!x || !x.id) return; vus.add(x.id); if(!A.aff[x.id] || Date.now() - A.aff[x.id] > 7*86400000){ A.aff[x.id] = Date.now(); msgs.affaires.push(`${x.nom} chez ${x.m} : prime ${String(x.prime.toFixed(1)).replace('.', ',')} % (d'habitude ${String(x.med.toFixed(1)).replace('.', ',')} %)`); } });
