@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
 import { relevePieces, releveSitesUtilisateur, verifierLivraison, releveFraisComparateur, verifierOffres, cleSite, ebayActif, ebayTester, ebayMarche, ebayAppels, ebayQuotaRestant, ebayQuotaAtteint } from './pieces.mjs';
-import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux, releveImmo, releveAmpleur, releveBofa } from './donnees-plus.mjs';
+import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux, releveImmo, releveAmpleur, releveBofa, releveRefMetaux } from './donnees-plus.mjs';
 
 const t0 = Date.now();
 const say = m => console.log(`[${Math.round((Date.now()-t0)/1000)} s] ${m}`);
@@ -16,7 +16,7 @@ if(!existsSync('app.enc')){ say("aucune application publiée pour l'instant : ri
 if(!MDP){ say('secret MOT_DE_PASSE pas encore configuré : rien à faire'); process.exit(0); }
 
 // mêmes familles de données que la page reprend (jamais de clé, jamais de donnée personnelle)
-const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|immo_stats|pieces_prix|pieces_hist|pieces_ebay|or_plus|inities|wl_inities|wl_projournal|wl_bpa|scan|secours)/;
+const KEEP_LS = /^mt_(sv_hist|history|learned_dates|etf_flows_hist|data_freshness|snapshot_temps|onchain_|halving_|yfull_|full_|resultcache_|france_result_cache|domcache_|sigmax_|guide_hyst|last_revision|oi_hist|fred_repl|autorepair|av_quota|bls_quota|tiingo_quota|dailyquota_|quota_usage_|fmp_blocked_until|jina_exhausted_until|key_issues|paid_service_health|format_ko|wl_deep|immo_stats|pieces_prix|pieces_baisse|pieces_hist|pieces_ebay|or_plus|inities|wl_inities|wl_projournal|wl_bpa|scan|secours)/;
 // 16/10 : les compteurs de quotas des services gratuits sont gardés d'un passage à l'autre (le robot passe bien plus souvent)
 
 const key = await cle(MDP, JSON.parse(readFileSync('sel.json', 'utf8')));
@@ -221,11 +221,17 @@ try{
     { const C = { ...(O.creux || {}) };
       if(!C.ampleur || Date.now() - (C.ampleur.at || 0) > 20*3600000){ try{ C.ampleur = await releveAmpleur(); neuf = true; }catch(e){ say('reprise générale des actions : ' + String(e.message).slice(0, 70)); } }
       const b0 = C.bofa, dernier = b0 ? (b0.essai || b0.at || 0) : 0;
-      if(!b0 || !b0.sources || Date.now() - dernier > (b0.cash == null || b0.err ? 6 : 20)*3600000){ // !sources : ancien format, relu tout de suite
-        try{ const b = await releveBofa(); if(b.cash != null || !b0 || b0.cash == null || Date.now() - (b0.at || 0) > 40*86400000) C.bofa = b; else C.bofa = { ...b0, essai: Date.now(), err: null }; }
+      // 22/11 (soir) : du 8 au 25 du mois (publication de l'enquête), relu toutes les heures tant que deux sources ne sont pas d'accord
+      const jourMois = new Date().getUTCDate(), chasse = jourMois >= 8 && jourMois <= 25 && !(b0 && b0.confirme && b0.mois === new Date().toISOString().slice(0, 7));
+      if(!b0 || !b0.sources || Date.now() - dernier > (chasse ? 1 : b0.cash == null || b0.err ? 6 : 20)*3600000){ // !sources : ancien format, relu tout de suite
+        try{ const b = await releveBofa(b0); if(b.cash != null || !b0 || b0.cash == null || Date.now() - (b0.at || 0) > 40*86400000) C.bofa = b; else C.bofa = { ...b0, essai: Date.now(), err: null }; }
         catch(e){ C.bofa = { ...(b0 || { cash: null }), essai: Date.now(), err: String(e.message || e).slice(0, 80) }; say('liquidités des gérants (presse) : ' + String(e.message).slice(0, 70)); }
         neuf = true; }
       C.at = Date.now(); O.creux = C; }
+    // 22/11 (soir) : prix officiels de l'or et de l'argent publiés par deux banques centrales (Pologne, Russie), une fois par jour :
+    // référence du contrôle croisé des cours dans l'appli
+    if(!O.refm || Date.now() - (O.refm.at || 0) > 20*3600000){ try{ O.refm = await releveRefMetaux(); neuf = true; if(O.refm.err) say('prix officiels des métaux : ' + O.refm.err); }
+      catch(e){ say('prix officiels des métaux : ' + String(e.message).slice(0, 70)); O.refm = { ...(O.refm || {}), at: Date.now() - 14*3600000 }; neuf = true; } }
     // 23/10 : nouvelles données (taux, INSEE, carburants, or de Shanghai et de Londres, crypto), chacune une fois par jour
     try{ const N = await releveNouveaux(O.nv); if(JSON.stringify(N.o) !== JSON.stringify(O.nv || {})){ O.nv = N.o; neuf = true; } if(N.err.length) say('nouvelles données : ' + N.err.join(' ; ')); }catch(e){ say('nouvelles données : relevé impossible'); }
     if(neuf) await ecrit('mt_or_plus', O);
@@ -339,6 +345,8 @@ try{
         const RE = await ebayMarche(conf, avantE); RE.appels = ebayAppels(); /* toutes les demandes de ce passage (boutiques suivies comprises) */ if(conf.quota) RE.etat.quota = conf.quota; if(ebayQuotaAtteint()) RE.etat.note = 'quota du jour atteint : reprise demain'; const n = await page.evaluate(R => { try{ return ebayEnregistrer(R); }catch(e){ return 'erreur ' + String(e.message).slice(0, 60); } }, RE);
         say(`offres eBay : ${RE.brut ? RE.brut.length + ' annonce(s) lue(s) (' + RE.finies + '/' + RE.taches + ' recherches), ' : ''}${RE.nouveaux ? RE.nouveaux.length + ' annonce(s) récente(s) (' + RE.balaye + ' recherches), ' : ''}${Object.keys(RE.verif || {}).length} relue(s), ${RE.appels} demande(s) en ${Math.round((Date.now() - t0e)/1000)} s${RE.etat.ok ? '' : ' — ' + RE.etat.msg}${typeof n === 'string' ? ' — ' + n : ''}`); } }
     else await page.evaluate(() => { try{ ebayEnregistrer({ etat: { at: Date.now(), ok: false, msg: 'clé absente' }, appels: 0 }); }catch(e){} }); }catch(e){ say('offres eBay : ' + String(e.message || e).slice(0, 80)); }
+  // 22/11 (soir) : baisses de prix des annonces suivies (boutiques eBay de « Mes sites », offres sûres des pièces suivies) : notification
+  try{ jour.baisses = await page.evaluate(() => { try{ return ebayBaisses(true); }catch(e){ return null; } }); if(jour.baisses && jour.baisses.length) say(`baisses de prix : ${jour.baisses.length} annonce(s)`); }catch(e){}
   try{ jour.ebayCle = await page.evaluate(() => { try{ const e = ebayDonnees().etat; return e ? { ko: !e.ok && e.msg !== 'clé absente', msg: e.msg } : null; }catch(x){ return null; } }); }catch(e){}
   // 22/11 : cadres « creux du marché » de l'accueil (21k) : état envoyé aux alertes (notification quand un cadre s'allume)
   try{ jour.creux = await page.evaluate(async () => { try{ creuxCharger(); for(let i = 0; i < 60 && !(window.__creux && window.__creux.at); i++) await new Promise(r => setTimeout(r, 500));

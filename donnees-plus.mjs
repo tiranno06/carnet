@@ -477,23 +477,82 @@ async function robotsPermis(url){ try{ const u = new URL(url), t = await lire(`$
     for(const l of t.split(/\r?\n/)){ const m = l.replace(/#.*/, '').trim().match(/^([a-z-]+)\s*:\s*(.*)$/i); if(!m) continue; const k = m[1].toLowerCase(), v = m[2].trim();
       if(k === 'user-agent'){ if(vu){ pourNous = false; vu = false; } if(v === '*') pourNous = true; continue; } vu = true; if(!pourNous) continue; if(k === 'disallow' && v) D.push(v); if(k === 'allow' && v) A.push(v); }
     const p = u.pathname, lg = L => Math.max(-1, ...L.filter(x => p.startsWith(x.replace(/\*.*$/, ''))).map(x => x.length)); return lg(A) >= lg(D); }catch(e){ return true; } } // pas de robots.txt = permis
-export async function releveBofa(){
-  const sources = [], limite = Date.now() - 45*86400000;
+// 22/11 (soir, demande du propriétaire : d'autres sources fiables) : c. Newsquawk (service d'information financière qui autorise
+// explicitement les robots dans son robots.txt) : sa page publique des titres du jour donne chaque mois un titre du type
+// « BofA Fund Manager Survey … cash levels are at 3.6% ». La page ne garde qu'environ une journée de titres : le robot la relit
+// toutes les heures pendant la période de publication (du 8 au 25 du mois) tant que le chiffre n'est pas confirmé.
+// Les sources trouvées pour une même enquête s'additionnent d'un passage à l'autre (prev).
+export function newsquawkTitres(html){
+  const out = [];
+  for(const a of String(html || '').split('<article').slice(1)){
+    const d = (a.match(/dateTime="([^"]+)"/) || [])[1], t = (a.match(/<h2[^>]*>([\s\S]*?)<\/h2>/) || [])[1];
+    if(t) out.push({ t: sansBalises(t).trim(), d: d ? d.slice(0, 10) : '' }); }
+  return out; }
+export function bofaFusion(sources, prev, limite){
+  const S = [...sources];
+  for(const s of ((prev && prev.sources) || [])){ const t = Date.parse(s.date || '') || (prev.at || 0);
+    if(t > limite && !S.some(x => x.nom === s.nom)) S.push(s); }
+  if(!S.length) return null;
+  const groupes = S.map(s => ({ v: s.val, n: S.filter(x => Math.abs(x.val - s.val) <= 0.1).length, a: s.nom === 'Atrani Capital' ? 1 : 0 })).sort((x, y) => y.n - x.n || y.a - x.a);
+  const g = groupes[0], principal = S.find(s => s.nom === 'Atrani Capital' && s.mois) || S.find(s => s.mois);
+  return { at: Date.now(), cash: g.v, confirme: g.n >= 2, mois: principal ? principal.mois : null, source: S.filter(s => Math.abs(s.val - g.v) <= 0.1).map(s => s.nom).join(', '),
+    sources: S.slice(0, 8), desaccord: S.filter(s => Math.abs(s.val - g.v) > 0.1).map(s => s.nom), date: (principal || S[0]).date || '' };
+}
+export async function releveBofa(prev){
+  const sources = [], limite = Date.now() - 45*86400000, err = [];
+  const mettre = s => { if(!sources.some(x => x.nom === s.nom)) sources.push(s); };
   // a. Atrani Capital
   try{ const t = await lire('https://atranicapital.substack.com/feed');
     for(const it of t.split('<item>').slice(1)){ const ti = sansBalises((it.match(/<title>([\s\S]*?)<\/title>/) || [])[1]), d = Date.parse((it.match(/<pubDate>([^<]+)</) || [])[1] || '');
       const mm = ti.match(/(january|february|march|april|may|june|july|august|september|october|november|december)\s+(20\d\d)\s+Bank of America Global Fund Manager Survey/i);
-      if(!mm || !(d > limite)) continue; const v = cashDans(it); if(v != null){ sources.push({ nom: 'Atrani Capital', val: v, mois: `${mm[2]}-${String(BOFA_MOIS[mm[1].toLowerCase()]).padStart(2, '0')}`, date: new Date(d).toISOString().slice(0, 10) }); break; } } }catch(e){}
+      if(!mm || !(d > limite)) continue; const v = cashDans(it); if(v != null){ mettre({ nom: 'Atrani Capital', val: v, mois: `${mm[2]}-${String(BOFA_MOIS[mm[1].toLowerCase()]).padStart(2, '0')}`, date: new Date(d).toISOString().slice(0, 10) }); break; } } }
+  catch(e){ err.push('Atrani : ' + String(e.message).slice(0, 40)); }
+  // c. Newsquawk (titres du jour)
+  try{ if(await robotsPermis('https://www.newsquawk.com/headlines')){
+      for(const x of newsquawkTitres(await lire('https://www.newsquawk.com/headlines'))){
+        if(!/fund manager survey|\bFMS\b/i.test(x.t) || !/bofa|bank of america/i.test(x.t)) continue;
+        const v = cashDans(x.t); if(v != null && Date.parse(x.d) > limite){ mettre({ nom: 'Newsquawk', val: v, date: x.d }); break; } } } }
+  catch(e){ err.push('Newsquawk : ' + String(e.message).slice(0, 40)); }
   // b. GDELT : titres puis texte des articles (sites qui autorisent les robots), 3 essais espacés de 7 s (une demande toutes les 5 s)
   let A = null, der = '';
   for(let essai = 0; essai < 3 && !A; essai++){ if(essai) await new Promise(r => setTimeout(r, 7000));
-    try{ der = await lire(`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent('"fund manager survey" cash')}&mode=artlist&maxrecords=60&timespan=40d&format=json&sort=datedesc`); A = (JSON.parse(der).articles || []); }catch(e){ der = der || String(e.message || e); } }
-  if(A){ const vus = new Set();
-    for(const a of A){ const v = cashDans(a.title); if(v != null && !vus.has(a.domain)){ vus.add(a.domain); sources.push({ nom: String(a.domain || '').slice(0, 40), val: v, date: String(a.seendate || '').slice(0, 8) }); } }
-    for(const a of A.filter(a => /fund manager survey/i.test(a.title || '') && !vus.has(a.domain)).slice(0, 6)){ try{ if(!(await robotsPermis(a.url))) continue; const v = cashDans(await lire(a.url)); if(v != null){ vus.add(a.domain); sources.push({ nom: String(a.domain || '').slice(0, 40), val: v, date: String(a.seendate || '').slice(0, 8) }); } }catch(e){} } }
-  if(!sources.length) return { at: Date.now(), cash: null, sources: [], err: A ? null : 'GDELT : ' + String(der).replace(/\s+/g, ' ').slice(0, 60) };
-  // valeur retenue : la plus citée (à 0,1 point près), Atrani Capital en priorité en cas d'égalité
-  const groupes = sources.map(s => ({ v: s.val, n: sources.filter(x => Math.abs(x.val - s.val) <= 0.1).length, a: s.nom === 'Atrani Capital' ? 1 : 0 })).sort((x, y) => y.n - x.n || y.a - x.a);
-  const g = groupes[0], principal = sources.find(s => s.nom === 'Atrani Capital');
-  return { at: Date.now(), cash: g.v, confirme: g.n >= 2, mois: principal ? principal.mois : null, source: sources.filter(s => Math.abs(s.val - g.v) <= 0.1).map(s => s.nom).join(', '), sources: sources.slice(0, 8), date: (principal || sources[0]).date || '' };
+    try{ der = await lire(`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent('"fund manager survey" cash')}&mode=artlist&maxrecords=60&timespan=40d&format=json&sort=datedesc`); A = (JSON.parse(der).articles || []); }catch(e){ der = String(e.message || der); } }
+  if(A){ const vus = new Set(sources.map(s => s.nom));
+    for(const a of A){ const v = cashDans(a.title); if(v != null && !vus.has(a.domain)){ vus.add(a.domain); mettre({ nom: String(a.domain || '').slice(0, 40), val: v, date: String(a.seendate || '').replace(/^(\d{4})(\d\d)(\d\d).*/, '$1-$2-$3') }); } }
+    for(const a of A.filter(a => /fund manager survey/i.test(a.title || '') && !vus.has(a.domain)).slice(0, 6)){ try{ if(!(await robotsPermis(a.url))) continue; const v = cashDans(await lire(a.url)); if(v != null){ vus.add(a.domain); mettre({ nom: String(a.domain || '').slice(0, 40), val: v, date: String(a.seendate || '').replace(/^(\d{4})(\d\d)(\d\d).*/, '$1-$2-$3') }); } }catch(e){} } }
+  else err.push('GDELT : ' + String(der).replace(/\s+/g, ' ').slice(0, 50));
+  // valeur retenue : la plus citée (à 0,1 point près), Atrani Capital en priorité en cas d'égalité ; sources des passages précédents gardées
+  const R = bofaFusion(sources, prev, limite);
+  if(!R) return { at: Date.now(), cash: null, sources: [], err: err.join(' ; ') || 'aucune source' };
+  return R;
+}
+
+// ---- 22/11 (soir, demande du propriétaire : « deux sources pour le cours de l'or », sources officielles) ----
+// Prix officiels publiés chaque jour ouvré par deux banques centrales, gratuits, sans clé, faits pour la lecture automatique :
+//   - Banque nationale de Pologne (NBP) : prix de l'or en zlotys le gramme, calculé à partir du prix de référence de Londres (LBMA),
+//     et son cours officiel du dollar le même jour ;
+//   - Banque centrale de Russie : prix de l'or et de l'argent en roubles le gramme, et son cours officiel du dollar.
+// Convertis en dollars l'once (31,1034768 g). Servent de référence officielle au contrôle croisé de l'appli (18), qui compare
+// au cours du marché du même jour.
+const ONCE = 31.1034768;
+export function cbrMetaux(xml){ const o = {}; // { 'AAAA-MM-JJ': { or, ag } } en roubles le gramme
+  for(const m of String(xml).matchAll(/<Record Date="(\d\d)\.(\d\d)\.(\d{4})" Code="([12])">[\s\S]*?<Buy>([\d,]+)<\/Buy>/g)){
+    const d = `${m[3]}-${m[2]}-${m[1]}`; (o[d] = o[d] || {})[m[4] === '1' ? 'or' : 'ag'] = parseFloat(m[5].replace(',', '.')); }
+  return o; }
+export function cbrDollar(xml){ const m = String(xml).match(/<CharCode>USD<\/CharCode>\s*<Nominal>(\d+)<\/Nominal>[\s\S]*?<Value>([\d,]+)<\/Value>/); return m ? parseFloat(m[2].replace(',', '.')) / +m[1] : null; }
+// le service de la banque de Pologne répond parfois « 404 » au hasard : 3 essais espacés de 3 s
+const lireEssais = async url => { let e0; for(let i = 0; i < 3; i++){ try{ return await lire(url); }catch(e){ e0 = e; await new Promise(r => setTimeout(r, 3000)); } } throw e0; };
+export async function releveRefMetaux(){
+  const out = { at: Date.now(), nbp: {}, cbr: {} }, err = [];
+  try{ const or = JSON.parse(await lireEssais('https://api.nbp.pl/api/cenyzlota/last/10/?format=json')), usd = JSON.parse(await lireEssais('https://api.nbp.pl/api/exchangerates/rates/a/usd/last/10/?format=json')).rates;
+    for(const x of or){ const r = usd.find(u => u.effectiveDate === x.data); if(r && x.cena > 0) out.nbp[x.data] = { or: Math.round(x.cena / r.mid * ONCE * 100) / 100 }; } }
+  catch(e){ err.push('Pologne : ' + String(e.message).slice(0, 40)); }
+  try{ const f = d => `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`, fin = new Date(), deb = new Date(Date.now() - 12*86400000);
+    const M = cbrMetaux(await lire(`https://www.cbr.ru/scripts/xml_metall.asp?date_req1=${f(deb)}&date_req2=${f(fin)}`));
+    for(const d of Object.keys(M).sort().slice(-6)){ const [a, m, j] = d.split('-'), usd = cbrDollar(await lire(`https://www.cbr.ru/scripts/XML_daily.asp?date_req=${j}/${m}/${a}`));
+      if(usd > 0) out.cbr[d] = { or: M[d].or ? Math.round(M[d].or / usd * ONCE * 100) / 100 : null, ag: M[d].ag ? Math.round(M[d].ag / usd * ONCE * 1000) / 1000 : null }; } }
+  catch(e){ err.push('Russie : ' + String(e.message).slice(0, 40)); }
+  if(!Object.keys(out.nbp).length && !Object.keys(out.cbr).length) throw new Error(err.join(' ; ') || 'aucun prix officiel');
+  if(err.length) out.err = err.join(' ; ');
+  return out;
 }

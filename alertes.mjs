@@ -154,6 +154,12 @@ export function alertes(H, st, subs){
     (st.pro.evts || []).forEach(e => { if(!e || !e.cle || A.proEv[e.cle]) return; A.proEv[e.cle] = Date.now(); msgs.pro.push(e.txt); });
     Object.keys(A.proEv).forEach(k => { if(Date.now() - A.proEv[k] > 30*86400000) delete A.proEv[k]; }); }
   // 3 undecies (17/10). bonne affaire sur une pièce d'or : prévenu quand elle apparaît (à nouveau après 7 jours au plus tôt)
+  // 22/11 (soir) : baisses de prix des annonces suivies (une notification par nouvelle baisse ; la même annonce au plus une fois par jour)
+  msgs.baisses = [];
+  if(Array.isArray(st.baisses)){ A.bx = A.bx || {}; Object.keys(A.bx).forEach(u => { if(Date.now() - A.bx[u] > 14*86400000) delete A.bx[u]; });
+    st.baisses.forEach(x => { if(!x || !x.u || (A.bx[x.u] && Date.now() - A.bx[x.u] < 86400000)) return; A.bx[x.u] = Date.now();
+      const e = v => String(Math.round(v * 100) / 100).replace('.', ',') + ' €';
+      msgs.baisses.push(`${x.nom} chez ${x.m} : ${e(x.avant)} → ${e(x.apres)} (livraison comprise)`); }); }
   msgs.affaires = [];
   if(Array.isArray(st.affaires)){ A.aff = A.aff || {}; const vus = new Set();
     st.affaires.forEach(x => { if(!x || !x.id) return; vus.add(x.id); if(!A.aff[x.id] || Date.now() - A.aff[x.id] > 7*86400000){ A.aff[x.id] = Date.now(); msgs.affaires.push(`${x.nom} chez ${x.m} : prime ${String(x.prime.toFixed(1)).replace('.', ',')} % (d'habitude ${String(x.med.toFixed(1)).replace('.', ',')} %)`); } });
@@ -246,6 +252,7 @@ export function alertes(H, st, subs){
     if(pr.prevision && msgs.prevision.length) parts.push(...msgs.prevision);
     if(parts.length) out.push({ s, title: parts.length === 1 ? 'Carnet : un changement' : `Carnet : ${parts.length} changements`, body: parts.join('\n'), url: msgs.prevision.length && pr.prevision ? './?vue=prevision' : './', tag:'carnet-alerte' });
     if(msgs.integrite.length) out.push({ s, title:'🛡️ Carnet : fichiers du site modifiés', body: 'Différents de la dernière publication : ' + msgs.integrite[0] + ". Si ce n'est pas une mise à jour de ta part ou de Claude, demande une vérification à Claude Code avant de saisir ton mot de passe.", url:'./', tag:'carnet-integrite' });
+    if(pr.zones && msgs.baisses.length) out.push({ s, title: msgs.baisses.length === 1 ? '📉 Carnet : un prix a baissé' : `📉 Carnet : ${msgs.baisses.length} prix ont baissé`, body: msgs.baisses.slice(0, 6).join('\n') + '\nVérifie l\'annonce avant d\'acheter.', url:'./?vue=mymetals', tag:'carnet-baisse' });
     if(pr.zones && msgs.affaires.length) out.push({ s, title:'🔥 Carnet : bonne affaire sur une pièce d\'or', body: msgs.affaires.join('\n') + '\nPrix affiché hors livraison ; vérifie sur le site avant d\'acheter.', url:'./?vue=mymetals', tag:'carnet-affaire' });
     if(pr.pannes && msgs.secours.length) out.push({ s, title:'🧯 Carnet : une source de secours ne répond plus', body: msgs.secours[0] + ' — en échec à 2 tests de suite. Tant que la source principale marche, rien ne change ; si elle tombe aussi, ces données ne se mettraient plus à jour. Le robot reteste chaque jour.', url:'./', tag:'carnet-secours' });
     if(msgs.creux.length) out.push({ s, title:'🚨 Carnet : signaux de creux du marché', body: msgs.creux.join('\n') + "\nRègle des cours BREIZH TRADE, pas testée sur le passé par le Carnet : regarde le cadre rouge de l'accueil et 🛒 Mes achats.", url:'./', tag:'carnet-creux' });
