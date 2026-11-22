@@ -176,9 +176,14 @@ export async function ebayVendeur(vendeur, mots = [], limiteMs = 75000, mp = 'EB
   return { produits: [...vus.values()], appels, complet, total, autres, mp }; }
 // 22/11 : demandes restantes aujourd'hui pour la Browse API (outil officiel d'eBay « Developer Analytics ») ; null si inconnu
 export async function ebayQuotaRestant(){ try{ const t = await ebayJeton(); const r = await fetch('https://api.ebay.com/developer/analytics/v1_beta/rate_limit/?api_name=browse', { headers: { authorization: 'Bearer ' + t }, signal: AbortSignal.timeout(20000) });
-  if(!r.ok) return null; const j = await r.json(); let rest = null, lim = null;
-  (j.rateLimits || []).forEach(a => (a.resources || []).forEach(x => (x.rates || []).forEach(z => { if(z.remaining != null && (rest == null || z.remaining < rest)){ rest = z.remaining; lim = z.limit; } })));
-  return rest == null ? null : { rest, lim }; }catch(e){ return null; } }
+  if(!r.ok) return null; const j = await r.json(); let rest = null, lim = null, reset = null;
+  (j.rateLimits || []).forEach(a => (a.resources || []).forEach(x => (x.rates || []).forEach(z => { if(z.remaining != null && (rest == null || z.remaining < rest)){ rest = z.remaining; lim = z.limit; reset = z.reset || null; } })));
+  return rest == null ? null : { rest, lim, reset }; }catch(e){ return null; } }
+// 22/11 (soir, triple vérification : 1 120 demandes restantes à 20 h) : le quota restant est réparti sur les passages du robot jusqu'à sa
+// remise à zéro (heure donnée par eBay, sinon minuit UTC ; environ 4 passages par heure) : demandes permises pour CE passage
+export function ebayBudgetPassage(quota, maintenant = Date.now()){ if(!quota || quota.rest == null) return 40;
+  let fin = quota.reset ? Date.parse(quota.reset) : NaN; if(!(fin > maintenant)){ const d = new Date(maintenant); fin = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1); }
+  const heures = Math.max(0.5, (fin - maintenant) / 3600000); return Math.max(4, Math.floor(quota.rest / (heures * 4))); }
 // 21/11 : état de la clé, pour le journal du robot (jamais la clé elle-même)
 export async function ebayTester(){ if(!(process.env.EBAY_CLE || '').trim()) return 'absente (boutiques eBay lues en partie)'; if(!ebayActif()) return 'mal écrite (attendu « App ID:Cert ID », sans espace)';
   try{ await ebayJeton(); const j = await ebayApi('item_summary/search?q=gold&limit=1'); const q = await ebayQuotaRestant(); return (j ? `acceptée ✅ (API joignable)` : 'acceptée, mais recherche vide') + (q ? ` · ${q.rest} demandes restantes aujourd'hui sur ${q.lim}` : ''); }catch(e){ return EBAY_QUOTA_ATTEINT ? 'acceptée, mais quota du jour atteint : reprise demain' : 'refusée : ' + String(e.message || e).slice(0, 80); } }
@@ -218,13 +223,14 @@ export async function ebayFicheComplete(url){ const id = (String(url).match(/\/i
 export async function ebayMarche(conf, avant = {}, budgetMs = 110000){
   const t0 = Date.now(), R = { etat: { at: Date.now(), ok: true, msg: '' }, appels: 0 };
   try{ await ebayJeton(); }catch(e){ R.etat = { at: Date.now(), ok: false, msg: String(e.message || e).slice(0, 80) }; return R; }
-  const plein = !(conf.quota && conf.quota.rest < 400) && (conf.force || !avant || !avant.brutAt || Date.now() - avant.brutAt > 6*3600000 || avant.sig !== conf.sig);
+  const budget = ebayBudgetPassage(conf.quota); R.budget = budget;
+  const plein = !(conf.quota && conf.quota.rest < 1200) && (conf.force || !avant || !avant.brutAt || Date.now() - avant.brutAt > 6*3600000 || avant.sig !== conf.sig);
   // 21/11 (demande du propriétaire : voir les nouvelles annonces au plus vite) : entre deux recherches complètes, à CHAQUE passage, une partie
   // des recherches « annonces les plus récentes » (tour à tour : chaque pièce sur chaque eBay environ toutes les heures), dans la limite des
   // 5 000 demandes par jour autorisées par eBay (au-delà de 3 800 demandes dans la journée, ce balayage s'arrête jusqu'au lendemain)
   if(!plein && (conf.pieces || []).length && (conf.appelsJour || 0) < 3800 && !(conf.quota && conf.quota.rest < 800)){
     const taches = []; conf.pieces.forEach(p => EBAY_VOISINS.forEach(mp => taches.push([p, (p.q || [])[0], mp])));
-    const n = Math.min(15, taches.length), dep = (avant.rot || 0) % taches.length, choix = Array.from({ length: n }, (_, i) => taches[(dep + i) % taches.length]); R.rot = (dep + n) % taches.length;
+    const n = Math.min(15, taches.length, Math.max(2, Math.floor(budget * 0.4))), dep = (avant.rot || 0) % taches.length, choix = Array.from({ length: n }, (_, i) => taches[(dep + i) % taches.length]); R.rot = (dep + n) % taches.length;
     const neuf = new Map(); let i = 0;
     const ouvrier = async () => { while(i < choix.length && Date.now() - t0 < budgetMs*0.5){ const [P, q, mp] = choix[i++]; if(!q) continue;
       const prixF = P.min > 0 ? `,price:%5B${Math.floor(P.min)}..${Math.ceil(P.max || P.min*3)}%5D,priceCurrency:EUR` : '';
@@ -243,7 +249,7 @@ export async function ebayMarche(conf, avant = {}, budgetMs = 110000){
     R.brut = [...brut.values()]; R.complet = finies === taches.length; R.taches = taches.length; R.finies = finies; R.erreurs = err;
     if(!finies && err){ R.etat = EBAY_QUOTA_ATTEINT ? { at: Date.now(), ok: true, msg: 'quota du jour atteint : reprise demain', quota: 1 } : { at: Date.now(), ok: false, msg: 'recherches eBay en échec' }; } }
   // disponibilité et prix des meilleures offres, relus à chaque passage (au plus 40, 25 s)
-  R.verif = {}; const V = (conf.verifier || []).slice(0, (conf.appelsJour || 0) > 4300 || (conf.quota && conf.quota.rest < 300) ? 5 : 25); let k = 0;
+  R.verif = {}; const V = (conf.verifier || []).slice(0, (conf.appelsJour || 0) > 4300 || (conf.quota && conf.quota.rest < 300) ? 5 : Math.min(25, Math.max(3, Math.floor(budget * 0.5)))); let k = 0;
   const ver = async () => { while(k < V.length && Date.now() - t0 < budgetMs*0.85){ const u = V[k++]; try{ const F = await ebayFicheComplete(u); R.appels++; R.verif[u] = { at: Date.now(), dispo: !!F.dispo, lu: F.lu, port: F.r ? F.r.port : null }; }catch(e){} } };
   await Promise.all(Array.from({ length: 4 }, ver));
   // liens d'annonces collés dans l'appli
