@@ -563,3 +563,23 @@ export async function releveRefMetaux(){
   if(err.length) out.err = err.join(' ; ');
   return out;
 }
+
+// ---- 24/11 (demande du propriétaire : le robot fait lui-même les mises à jour nécessaires) ----
+// 1. calendrier officiel des réunions de la Fed (page publique federalreserve.gov) : [année, mois du 1er jour, 1er jour, mois du 2e, 2e jour]
+export function fomcLire(html){ const MO = { january: 0, february: 1, march: 2, april: 3, may: 4, june: 5, july: 6, august: 7, september: 8, october: 9, november: 10, december: 11 };
+  const parts = String(html).split(/(\d{4}) FOMC Meetings/), out = [];
+  for(let i = 1; i < parts.length; i += 2){ const y = +parts[i], sec = parts[i + 1];
+    for(const m of sec.matchAll(/fomc-meeting__month[^>]*>\s*<strong>([^<]+)<\/strong>[\s\S]*?fomc-meeting__date[^>]*>([^<]+)</g)){
+      const mo = m[1].trim().toLowerCase().split('/'), dd = m[2].trim().replace(/\*/g, '').match(/(\d+)\s*-\s*(\d+)/); if(!dd) continue;
+      const mois = x => { const k = Object.keys(MO).find(n => n.startsWith(x.trim().slice(0, 3))); return k == null ? null : MO[k]; }, m1 = mois(mo[0]), m2 = mois(mo[mo.length - 1]); /* « Apr/May » : mois abrégés */ if(m1 == null || m2 == null) continue; out.push([y, m1, +dd[1], m2, +dd[2]]); } }
+  return out; }
+export async function releveFomc(){ const r = fomcLire(await lire('https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm')); const an = new Date().getUTCFullYear();
+  if(r.filter(x => x[0] === an).length < 6) throw new Error('calendrier de la Fed : format changé (moins de 6 réunions lues pour ' + an + ')');
+  return { at: Date.now(), r: r.filter(x => x[0] >= an - 1) }; }
+// 2. taxe forfaitaire sur les métaux précieux (page officielle des douanes) : taux de la taxe et de la CRDS, relus chaque semaine
+export function taxeMetauxLire(html){ const t = String(html).replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/g, ' ').replace(/&eacute;/g, 'é').replace(/&agrave;/g, 'à').replace(/\s+/g, ' ');
+  const m = t.match(/(\d+(?:[,.]\d+)?)\s*%\s*de la valeur en douane pour les métaux précieux/i), c = t.match(/CRDS\)?[^.%]{0,30}?au taux de\s*(\d+(?:[,.]\d+)?)\s*%/i);
+  const n = x => x ? parseFloat(x[1].replace(',', '.')) : null; return { taxe: n(m), crds: n(c) }; }
+export async function releveTaxeMetaux(){ const r = taxeMetauxLire(await lire('https://www.douane.gouv.fr/demarche/sacquitter-de-la-taxe-forfaitaire-sur-les-objets-precieux-tfop'));
+  if(!(r.taxe > 3 && r.taxe < 30) || !(r.crds >= 0 && r.crds < 3)) throw new Error('taxe sur les métaux précieux : format de la page des douanes changé');
+  return { at: Date.now(), ...r }; }

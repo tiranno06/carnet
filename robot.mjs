@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 import { cle, chiffre, dechiffre } from './chiffre.mjs';
 import { vapidKeys, enregistrer, alertes } from './alertes.mjs';
 import { relevePieces, releveSitesUtilisateur, verifierLivraison, releveFraisComparateur, verifierOffres, cleSite, ebayActif, ebayTester, ebayMarche, ebayAppels, ebayQuotaRestant, ebayQuotaAtteint } from './pieces.mjs';
-import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux, releveImmo, releveAmpleur, releveBofa, releveRefMetaux } from './donnees-plus.mjs';
+import { releveOrBanques, releveOrEtf, releveInitiesMarche, releveInitiesListe, releveDefaillances, releveEurope, releveNouveaux, releveImmo, releveAmpleur, releveBofa, releveRefMetaux, releveFomc, releveTaxeMetaux } from './donnees-plus.mjs';
 
 const t0 = Date.now();
 const say = m => console.log(`[${Math.round((Date.now()-t0)/1000)} s] ${m}`);
@@ -76,7 +76,8 @@ try{
     [/^https:\/\/cors-get-proxy\.sirjosh\.workers\.dev\/\?url=([^&]+)/, m => decodeURIComponent(m[1])],
     [/^https:\/\/corsmirror\.onrender\.com\/v1\/cors\?url=([^&]+)/, m => decodeURIComponent(m[1])],
   ];
-  const direct = { ok: 0, repli: 0 };
+  const direct = { ok: 0, repli: 0, h: {} }; // 24/11 : h = sites publics qui obligent à repasser par un relais (nommés seulement s'ils sont dans SITES_PUBLICS)
+  const repliNote = (u, pourquoi) => { try{ const h = new URL(u).hostname, m = h.match(SITES_PUBLICS); const k = (m ? m[1].toLowerCase() : 'autres') + ' ' + pourquoi; direct.h[k] = (direct.h[k] || 0) + 1; }catch(e){} };
   await ctx.route(/^https:\/\/(seep\.eu\.org|api\.allorigins\.win|corsmirror\.com|cors-get-proxy\.sirjosh\.workers\.dev|corsmirror\.onrender\.com)\//, async route => {
     const rq = route.request(); let cible = null;
     for(const [re, f] of RELAIS){ const m = rq.url().match(re); if(m){ try{ cible = f(m); }catch(e){} break; } }
@@ -85,10 +86,10 @@ try{
       // 06/11 : depuis les serveurs de GitHub, la Fed (fred.stlouisfed.org) ne répond plus à un navigateur Chrome (attente sans fin),
       // mais répond tout de suite à un programme qui dit son nom : FRED est donc lu avec UA_FRED
       const r = await route.fetch({ url: cible, headers: { 'user-agent': /^https:\/\/(fred|api)\.stlouisfed\.org\//.test(cible) ? UA_FRED : UA, 'accept': '*/*', 'accept-language': 'fr-FR,fr;q=0.9,en;q=0.8' }, timeout: 15000 });
-      if(r.status() >= 400){ direct.repli++; return route.continue().catch(() => {}); }
+      if(r.status() >= 400){ direct.repli++; repliNote(cible, r.status()); return route.continue().catch(() => {}); }
       direct.ok++;
       return route.fulfill({ status: r.status(), body: await r.body(), headers: { 'content-type': r.headers()['content-type'] || 'text/plain; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
-    }catch(e){ direct.repli++; return route.continue().catch(() => {}); }
+    }catch(e){ direct.repli++; repliNote(cible, /timeout/i.test(String(e && e.message)) ? 'délai' : 'erreur'); return route.continue().catch(() => {}); }
   });
   // 06/11 : lectures directes de la Fed par la page : même nom de programme que ci-dessus (sinon attente sans réponse)
   await ctx.route(/^https:\/\/fred\.stlouisfed\.org\//, async route => {
@@ -167,7 +168,7 @@ try{
       const P = avant; P.sites = P.sites || {}; let nS = 0;
       const R = await releveSitesUtilisateur(page.context(), { ...conf, sites: aRefaire }, P.sites, 100000, 6);
       for(const [h, r] of Object.entries(R)){ const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
-        P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, cov: r.cov || null, offres: offres.length ? offres : (douteux(P.sites[h]) || (r.cov && r.cov.mode === 'api') ? [] : ((P.sites[h] || {}).offres || [])) }; nS++;
+        P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, vide: r.produits.length ? null : (r.err && !/aucune annonce/.test(r.err) ? ((P.sites[h] || {}).vide || null) : ((P.sites[h] || {}).vide || Date.now())), /* 24/11 : depuis quand le site, lu correctement, ne montre plus aucune annonce */ cov: r.cov || null, offres: offres.length ? offres : (douteux(P.sites[h]) || (r.cov && r.cov.mode === 'api') ? [] : ((P.sites[h] || {}).offres || [])) }; nS++;
         say(`pièces — site personnel relu : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); }
       await page.evaluate(v => { localStorage.setItem('mt_pieces_prix', v); try{ piecesHistNoter(); }catch(e){} }, JSON.stringify(P));
     }
@@ -180,7 +181,7 @@ try{
         for(const [h, r] of Object.entries(R)){
           const offres = r.produits.length ? await page.evaluate(L => { try{ return piecesRapprocher(L); }catch(e){ return []; } }, r.produits) : [];
           const ancien = P.sites[h] || {};
-          P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, cov: r.cov || null, offres: offres.length ? offres : (r.err && !douteux(ancien) && !(r.cov && r.cov.mode === 'api') ? (ancien.offres || []) : []) };
+          P.sites[h] = { okAt: r.err ? ((P.sites[h] || {}).okAt || null) : Date.now(), nom: r.nom, url: r.url, at: Date.now(), err: r.err || (r.produits.length && !offres.length ? 'aucune de tes pièces reconnue' : null), n: r.produits.length, vide: r.produits.length ? null : (r.err && !/aucune annonce/.test(r.err) ? (ancien.vide || null) : (ancien.vide || Date.now())), cov: r.cov || null, offres: offres.length ? offres : (r.err && !douteux(ancien) && !(r.cov && r.cov.mode === 'api') ? (ancien.offres || []) : []) };
           nS++; say(`pièces — site personnel n°${nS} : ${r.err ? r.err : `${r.produits.length} annonce(s) lue(s), ${offres.length} pièce(s) reconnue(s)`}`); // jamais le nom du site : le journal est public
         }
       }
@@ -228,6 +229,12 @@ try{
         catch(e){ C.bofa = { ...(b0 || { cash: null }), essai: Date.now(), err: String(e.message || e).slice(0, 80) }; say('liquidités des gérants (presse) : ' + String(e.message).slice(0, 70)); }
         neuf = true; }
       C.at = Date.now(); O.creux = C; }
+    // 24/11 (demande du propriétaire : les mises à jour faites par le robot lui-même) : calendrier officiel des réunions de la Fed et taux
+    // officiel de la taxe sur les métaux précieux (douanes), relus chaque semaine ; un taux qui change est noté (notification + Santé)
+    const semaine = 7*86400000;
+    if(!O.fomc || Date.now() - (O.fomc.at || 0) > semaine){ try{ O.fomc = await releveFomc(); neuf = true; }catch(e){ say('calendrier de la Fed : ' + String(e.message).slice(0, 70)); O.fomc = { ...(O.fomc || {}), at: Date.now() - 6*86400000, err: String(e.message).slice(0, 80) }; neuf = true; } }
+    if(!O.taxes || Date.now() - (O.taxes.at || 0) > semaine){ try{ const T = await releveTaxeMetaux(), a = O.taxes; O.taxes = { ...T, change: a && a.taxe != null && (a.taxe !== T.taxe || a.crds !== T.crds) ? { avant: [a.taxe, a.crds], at: Date.now() } : (a && a.change) || null }; neuf = true; }
+      catch(e){ say('taxe sur les métaux précieux : ' + String(e.message).slice(0, 70)); O.taxes = { ...(O.taxes || {}), at: Date.now() - 6*86400000, err: String(e.message).slice(0, 80) }; neuf = true; } }
     // 22/11 (soir) : prix officiels de l'or et de l'argent publiés par deux banques centrales (Pologne, Russie), une fois par jour :
     // référence du contrôle croisé des cours dans l'appli
     if(!O.refm || Date.now() - (O.refm.at || 0) > 20*3600000){ try{ O.refm = await releveRefMetaux(); neuf = true; if(O.refm.err) say('prix officiels des métaux : ' + O.refm.err); }
@@ -270,7 +277,7 @@ try{
     });
     if(bt) say('test sur le passé recalculé : ' + bt);
   }catch(e){}
-  say(`lectures directes sans intermédiaire : ${direct.ok} (repli sur l'intermédiaire : ${direct.repli})`);
+  say(`lectures directes sans intermédiaire : ${direct.ok} (repli sur l'intermédiaire : ${direct.repli}${direct.repli ? ' : ' + Object.entries(direct.h).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, n]) => k + ' ×' + n).join(', ') : ''})`);
   // 09/10 : données du Guide (indice Monde) et contrôles de cohérence, utilisés par le relevé ci-dessous
   await page.evaluate(async () => { try{ if(!window.__coursLastD && typeof coursLiveData==='function') window.__coursLastD = await coursLiveData(); }catch(e){} try{ if(!window.__xcheckAt && typeof runCrossChecks==='function') await runCrossChecks(); }catch(e){} }).catch(() => {});
   // 09/10 (n°10) : ta liste de suivi — mesures du jour et alertes (le contenu reste chiffré, seul un nombre va au journal)
@@ -348,6 +355,8 @@ try{
   // 22/11 (soir) : baisses de prix des annonces suivies (boutiques eBay de « Mes sites », offres sûres des pièces suivies) : notification
   try{ jour.baisses = await page.evaluate(() => { try{ return ebayBaisses(true); }catch(e){ return null; } }); if(jour.baisses && jour.baisses.length) say(`baisses de prix : ${jour.baisses.length} annonce(s)`); }catch(e){}
   try{ jour.ebayCle = await page.evaluate(() => { try{ const e = ebayDonnees().etat; return e ? { ko: !e.ok && e.msg !== 'clé absente', msg: e.msg } : null; }catch(x){ return null; } }); }catch(e){}
+  // 24/11 : taux officiel de la taxe sur les métaux précieux changé (relu par le robot sur la page des douanes) : notification
+  try{ jour.taxes = await page.evaluate(() => { try{ const T = (JSON.parse(localStorage.getItem('mt_or_plus') || 'null') || {}).taxes; return T && T.change ? { taxe: T.taxe, crds: T.crds, avant: T.change.avant, at: T.change.at } : null; }catch(e){ return null; } }); }catch(e){}
   // 22/11 : cadres « creux du marché » de l'accueil (21k) : état envoyé aux alertes (notification quand un cadre s'allume)
   try{ jour.creux = await page.evaluate(async () => { try{ creuxCharger(); for(let i = 0; i < 60 && !(window.__creux && window.__creux.at); i++) await new Promise(r => setTimeout(r, 500));
     const B = creuxBourse(), O = creuxOr(); return { bourse: !!(B && B.alerte), nb: B ? B.n : 0, or: !!(O && O.alerte), nbOr: O ? O.n : null }; }catch(e){ return null; } });
