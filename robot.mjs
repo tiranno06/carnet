@@ -76,20 +76,23 @@ try{
     [/^https:\/\/cors-get-proxy\.sirjosh\.workers\.dev\/\?url=([^&]+)/, m => decodeURIComponent(m[1])],
     [/^https:\/\/corsmirror\.onrender\.com\/v1\/cors\?url=([^&]+)/, m => decodeURIComponent(m[1])],
   ];
-  const direct = { ok: 0, repli: 0, h: {} }; // 24/11 : h = sites publics qui obligent à repasser par un relais (nommés seulement s'ils sont dans SITES_PUBLICS)
+  const direct = { ok: 0, repli: 0, h: {}, ko: {}, saute: 0 }; // 24/11 : h = sites publics qui obligent à repasser par un relais (nommés seulement s'ils sont dans SITES_PUBLICS)
   const repliNote = (u, pourquoi) => { try{ const h = new URL(u).hostname, m = h.match(SITES_PUBLICS); const k = (m ? m[1].toLowerCase() : 'autres') + ' ' + pourquoi; direct.h[k] = (direct.h[k] || 0) + 1; }catch(e){} };
   await ctx.route(/^https:\/\/(seep\.eu\.org|api\.allorigins\.win|corsmirror\.com|cors-get-proxy\.sirjosh\.workers\.dev|corsmirror\.onrender\.com)\//, async route => {
     const rq = route.request(); let cible = null;
     for(const [re, f] of RELAIS){ const m = rq.url().match(re); if(m){ try{ cible = f(m); }catch(e){} break; } }
     if(!cible || rq.method() !== 'GET') return route.continue().catch(() => {});
+    // 24/11 : un site qui a échoué 3 fois en lecture directe pendant ce passage n'est plus essayé en direct (multpl : 61 essais perdus par passage)
+    let hc = ''; try{ hc = new URL(cible).hostname; }catch(e){}
+    if((direct.ko[hc] || 0) >= 3){ direct.saute++; return route.continue().catch(() => {}); }
     try{
       // 06/11 : depuis les serveurs de GitHub, la Fed (fred.stlouisfed.org) ne répond plus à un navigateur Chrome (attente sans fin),
       // mais répond tout de suite à un programme qui dit son nom : FRED est donc lu avec UA_FRED
       const r = await route.fetch({ url: cible, headers: { 'user-agent': /^https:\/\/(fred|api)\.stlouisfed\.org\//.test(cible) ? UA_FRED : UA, 'accept': '*/*', 'accept-language': 'fr-FR,fr;q=0.9,en;q=0.8' }, timeout: 15000 });
-      if(r.status() >= 400){ direct.repli++; repliNote(cible, r.status()); return route.continue().catch(() => {}); }
-      direct.ok++;
+      if(r.status() >= 400){ direct.repli++; direct.ko[hc] = (direct.ko[hc] || 0) + 1; repliNote(cible, r.status()); return route.continue().catch(() => {}); }
+      direct.ok++; direct.ko[hc] = 0;
       return route.fulfill({ status: r.status(), body: await r.body(), headers: { 'content-type': r.headers()['content-type'] || 'text/plain; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
-    }catch(e){ direct.repli++; repliNote(cible, /timeout/i.test(String(e && e.message)) ? 'délai' : 'erreur'); return route.continue().catch(() => {}); }
+    }catch(e){ direct.repli++; direct.ko[hc] = (direct.ko[hc] || 0) + 1; repliNote(cible, /timeout/i.test(String(e && e.message)) ? 'délai' : 'erreur'); return route.continue().catch(() => {}); }
   });
   // 06/11 : lectures directes de la Fed par la page : même nom de programme que ci-dessus (sinon attente sans réponse)
   await ctx.route(/^https:\/\/fred\.stlouisfed\.org\//, async route => {
@@ -232,8 +235,8 @@ try{
     // 24/11 (demande du propriétaire : les mises à jour faites par le robot lui-même) : calendrier officiel des réunions de la Fed et taux
     // officiel de la taxe sur les métaux précieux (douanes), relus chaque semaine ; un taux qui change est noté (notification + Santé)
     const semaine = 7*86400000;
-    if(!O.fomc || Date.now() - (O.fomc.at || 0) > semaine){ try{ O.fomc = await releveFomc(); neuf = true; }catch(e){ say('calendrier de la Fed : ' + String(e.message).slice(0, 70)); O.fomc = { ...(O.fomc || {}), at: Date.now() - 6*86400000, err: String(e.message).slice(0, 80) }; neuf = true; } }
-    if(!O.taxes || Date.now() - (O.taxes.at || 0) > semaine){ try{ const T = await releveTaxeMetaux(), a = O.taxes; O.taxes = { ...T, change: a && a.taxe != null && (a.taxe !== T.taxe || a.crds !== T.crds) ? { avant: [a.taxe, a.crds], at: Date.now() } : (a && a.change) || null }; neuf = true; }
+    if(!O.fomc || Date.now() - (O.fomc.at || 0) > semaine){ try{ O.fomc = await releveFomc(); neuf = true; say(`calendrier de la Fed relu : ${(O.fomc.r || []).length} réunion(s)`); }catch(e){ say('calendrier de la Fed : ' + String(e.message).slice(0, 70)); O.fomc = { ...(O.fomc || {}), at: Date.now() - 6*86400000, err: String(e.message).slice(0, 80) }; neuf = true; } }
+    if(!O.taxes || Date.now() - (O.taxes.at || 0) > semaine){ try{ const T = await releveTaxeMetaux(), a = O.taxes; O.taxes = { ...T, change: a && a.taxe != null && (a.taxe !== T.taxe || a.crds !== T.crds) ? { avant: [a.taxe, a.crds], at: Date.now() } : (a && a.change) || null }; neuf = true; say(`taxe sur les métaux relue : ${T.taxe} % + CRDS ${T.crds} %`); }
       catch(e){ say('taxe sur les métaux précieux : ' + String(e.message).slice(0, 70)); O.taxes = { ...(O.taxes || {}), at: Date.now() - 6*86400000, err: String(e.message).slice(0, 80) }; neuf = true; } }
     // 22/11 (soir) : prix officiels de l'or et de l'argent publiés par deux banques centrales (Pologne, Russie), une fois par jour :
     // référence du contrôle croisé des cours dans l'appli
@@ -277,7 +280,7 @@ try{
     });
     if(bt) say('test sur le passé recalculé : ' + bt);
   }catch(e){}
-  say(`lectures directes sans intermédiaire : ${direct.ok} (repli sur l'intermédiaire : ${direct.repli}${direct.repli ? ' : ' + Object.entries(direct.h).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, n]) => k + ' ×' + n).join(', ') : ''})`);
+  say(`lectures directes sans intermédiaire : ${direct.ok} (repli sur l'intermédiaire : ${direct.repli}${direct.repli ? ' : ' + Object.entries(direct.h).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, n]) => k + ' ×' + n).join(', ') : ''}${direct.saute ? ' ; ' + direct.saute + ' envoyée(s) au relais sans réessayer en direct' : ''})`);
   // 09/10 : données du Guide (indice Monde) et contrôles de cohérence, utilisés par le relevé ci-dessous
   await page.evaluate(async () => { try{ if(!window.__coursLastD && typeof coursLiveData==='function') window.__coursLastD = await coursLiveData(); }catch(e){} try{ if(!window.__xcheckAt && typeof runCrossChecks==='function') await runCrossChecks(); }catch(e){} }).catch(() => {});
   // 09/10 (n°10) : ta liste de suivi — mesures du jour et alertes (le contenu reste chiffré, seul un nombre va au journal)
